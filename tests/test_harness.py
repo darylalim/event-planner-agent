@@ -14,10 +14,15 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
 from event_planner.agent import build_agent
+from event_planner.cli import DEFAULT_MAX_STEPS
 from event_planner.context import PlannerContext
 
 THREAD = {"configurable": {"thread_id": "t-1"}}
 CTX = PlannerContext(user_id="alice@example.com")
+
+#: Middleware nodes that run once per turn rather than per tool round trip.
+_BEFORE_AGENT_NODES = 3  # Skills, PatchToolCalls, Memory
+_AFTER_MODEL_NODES = 2  # HumanInTheLoop, TodoList
 
 
 def _agent(model, store=None):
@@ -198,6 +203,54 @@ def test_unlisted_tools_are_not_gated(scripted):
     )
     assert "__interrupt__" not in result
     assert [m for m in result["messages"] if getattr(m, "name", None) == "search_venues"]
+
+
+# --------------------------------------------------------------------------- #
+# step budget
+# --------------------------------------------------------------------------- #
+
+
+def test_step_budget_survives_a_long_planning_session(scripted):
+    """Every middleware node counts as a LangGraph super-step.
+
+    This harness runs five middleware nodes per model turn, so a tool round
+    trip costs far more than the two steps (model + tools) you would expect.
+    LangGraph's default `recursion_limit` of 25 therefore strands a real
+    session after only a handful of tool calls — measured live, not guessed.
+
+    If middleware is added or removed, this test reports the new per-round-trip
+    cost rather than letting a silent truncation reach users.
+    """
+    call = AIMessage(
+        content="Looking.",
+        tool_calls=[
+            {
+                "name": "search_venues",
+                "args": {"city": "San Francisco", "min_capacity": 50},
+                "id": "step-1",
+            }
+        ],
+    )
+    graph = _agent(scripted(call, AIMessage(content="done")))
+    steps = sum(
+        1
+        for _ in graph.stream(
+            {"messages": [{"role": "user", "content": "Find venues."}]},
+            config=THREAD,
+            context=CTX,
+            stream_mode="updates",
+        )
+    )
+
+    # One tool round trip, plus the one-off before_agent nodes.
+    assert steps > 2, "step accounting looks wrong; middleware may not be running"
+    per_round_trip = max(1, steps - _BEFORE_AGENT_NODES - _AFTER_MODEL_NODES)
+    affordable = DEFAULT_MAX_STEPS // per_round_trip
+    assert affordable >= 30, (
+        f"budget of {DEFAULT_MAX_STEPS} affords only ~{affordable} tool round "
+        f"trips at {per_round_trip} steps each — too few for a planning session"
+    )
+    assert DEFAULT_MAX_STEPS > 25, "must exceed LangGraph's default of 25"
 
 
 # Memory scoping and tenant isolation are covered in tests/test_security.py.

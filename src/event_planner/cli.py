@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,14 @@ from event_planner.context import PlannerContext
 #: the per-user namespacing entirely. `_check_db_outside_workspace` enforces
 #: this for operator-supplied paths too.
 STATE_DIR = PROJECT_ROOT / ".state"
+
+#: LangGraph counts every node as a super-step, and this harness runs five
+#: middleware nodes per model turn (three `before_agent`, two `after_model`).
+#: Measured against the live model, one tool round trip costs ~4 steps, so
+#: LangGraph's default of 25 dies after about five tool calls — far short of a
+#: planning session that shortlists venues, checks dates, prices catering, and
+#: delegates to subagents. Budget for a long session instead.
+DEFAULT_MAX_STEPS = 200
 
 BANNER = """\
 Event Planner  (Deep Agents)
@@ -179,6 +188,38 @@ def _run_turn(graph: Any, payload: Any, config: dict, context: PlannerContext) -
         payload = Command(resume={"decisions": _collect_decisions(pending)})
 
 
+def _load_env() -> None:
+    """Load `.env` from the project root, deterministically.
+
+    Bare `load_dotenv()` searches upward from the *calling file*, which happens
+    to work for an editable install and silently finds nothing otherwise. The
+    failure then surfaces as an opaque auth TypeError from deep inside the SDK,
+    so pin the path instead.
+    """
+    env_file = PROJECT_ROOT / ".env"
+    if env_file.is_file():
+        load_dotenv(env_file)
+    else:
+        load_dotenv()  # fall back to the default search
+
+
+def _check_credentials() -> str | None:
+    """Return an actionable message when required credentials are missing."""
+    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        return (
+            f"ANTHROPIC_API_KEY is not set.\n"
+            f"  Copy .env.example to .env and fill it in:\n"
+            f"    cp {PROJECT_ROOT / '.env.example'} {PROJECT_ROOT / '.env'}"
+        )
+    if not os.environ.get("TAVILY_API_KEY", "").strip():
+        print(
+            "  note: TAVILY_API_KEY not set — web_search will degrade to the "
+            "structured directory only.\n",
+            file=sys.stderr,
+        )
+    return None
+
+
 def _check_db_outside_workspace(db_path: Path) -> None:
     """Refuse to put agent state where the agent can read it.
 
@@ -233,9 +274,21 @@ def main() -> int:
         default=str(STATE_DIR / "planner.sqlite"),
         help="SQLite file backing conversation state and memory.",
     )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=DEFAULT_MAX_STEPS,
+        help=(
+            "Graph super-step budget per turn. Each tool round trip costs about "
+            f"4 steps with this middleware stack (default: {DEFAULT_MAX_STEPS})."
+        ),
+    )
     args = parser.parse_args()
 
-    load_dotenv()
+    _load_env()
+    if (problem := _check_credentials()) is not None:
+        print(f"error: {problem}", file=sys.stderr)
+        return 2
 
     db_path = Path(args.db)
     try:
@@ -251,7 +304,10 @@ def main() -> int:
     ):
         store.setup()
         graph = build_agent(model=args.model, checkpointer=checkpointer, store=store)
-        config = {"configurable": {"thread_id": args.thread}}
+        config = {
+            "configurable": {"thread_id": args.thread},
+            "recursion_limit": args.max_steps,
+        }
         context = PlannerContext(user_id=args.user)
 
         print(BANNER.format(thread=args.thread, user=args.user, model=args.model))

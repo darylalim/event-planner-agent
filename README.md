@@ -40,6 +40,7 @@ directory and flag that reputation data went unchecked.
 uv run event-planner                                  # interactive CLI
 uv run event-planner --user alice@example.com         # scoped memory
 uv run event-planner --thread offsite-2026            # named conversation
+uv run event-planner --max-steps 400                  # longer planning session
 uv run langgraph dev                                  # LangGraph Studio
 uv run pytest                                         # harness tests
 ```
@@ -121,6 +122,22 @@ request invites the model to read commentary as confirmation.
 `interrupt_on` silently does nothing without a checkpointer, so `build_agent`
 raises rather than handing back an agent whose approval gates don't gate. Pass
 `hosted=True` only when LangGraph Platform supplies its own persistence.
+
+### Step budget
+
+LangGraph counts every node as a super-step, and this harness runs five
+middleware nodes per model turn — three `before_agent` (Skills, PatchToolCalls,
+Memory) and two `after_model` (HumanInTheLoop, TodoList). Measured against the
+live model, a single tool round trip costs about **4 steps**, not the 2 you'd
+expect from `model → tools`:
+
+```
+3 × before_agent → model → 2 × after_model → tools → model → 2 × after_model
+= 10 steps for one tool call and a final answer
+```
+
+LangGraph's default `recursion_limit` of 25 therefore strands a session after
+roughly five tool calls. The CLI sets 200 instead; tune with `--max-steps`.
 
 ## What's real and what's stubbed
 
