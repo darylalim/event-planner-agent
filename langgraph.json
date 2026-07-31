@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "event_planner": "./src/event_planner/agent.py:hosted_agent"
+  },
+  "env": ".env"
+}

@@ -1,0 +1,156 @@
+"""Deep Agent wiring for the event planner.
+
+Backend layout — the load-bearing decision in this file:
+
+    CompositeBackend
+      default        -> FilesystemBackend(root_dir=workspace)   ephemeral-ish, on disk
+      "/memories/"   -> StoreBackend(namespace=per-user)        persists across sessions
+
+`CompositeBackend` matches the longest route prefix first, so anything the
+agent writes under `/memories/` lands in the LangGraph store and survives the
+thread; everything else is an ordinary file in the workspace directory.
+
+Two things worth knowing if you change this:
+
+* `FilesystemBackend` is rooted at `workspace/`, not the repo root, and runs
+  with `virtual_mode=True`. The agent therefore cannot read or write its own
+  source. Do not repoint `root_dir` at the repo, and do not use this backend in
+  a server process that handles untrusted input.
+* `interrupt_on` silently does nothing without a checkpointer. The build below
+  will refuse to hand back an un-gated agent rather than let that pass quietly.
+* `TodoListMiddleware` is added explicitly. Despite what the Deep Agents docs
+  say, `create_deep_agent` in 0.7.1 does not bind `write_todos` on its own —
+  verified by inspecting the tools actually bound to the model. The
+  orchestrator prompt tells the agent to plan with `write_todos`, so without
+  this the model would be instructed to call a tool that does not exist.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, cast
+
+from deepagents import create_deep_agent
+from deepagents.backends import CompositeBackend, FilesystemBackend, StoreBackend
+from langchain.agents.middleware import TodoListMiddleware
+from langgraph.store.base import BaseStore
+
+from event_planner.context import PlannerContext, memory_namespace
+from event_planner.prompts import ORCHESTRATOR_PROMPT
+from event_planner.subagents import SUBAGENTS
+from event_planner.tools import (
+    check_availability,
+    estimate_budget,
+    hold_venue,
+    search_vendors,
+    search_venues,
+    send_invitations,
+    web_search,
+)
+
+DEFAULT_MODEL = "claude-opus-5"
+
+#: Repo root, i.e. the parent of `src/`.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+#: Everything the agent can see on disk. Deliberately not the repo root.
+WORKSPACE = PROJECT_ROOT / "workspace"
+
+#: Tools that spend money or contact guests, and the decisions allowed on each.
+#: `respond` is omitted: a free-text reply to a booking request invites the
+#: model to treat commentary as confirmation. Approve it, fix it, or refuse it.
+INTERRUPT_ON: dict[str, Any] = {
+    "hold_venue": {"allowed_decisions": ["approve", "edit", "reject"]},
+    "send_invitations": {"allowed_decisions": ["approve", "edit", "reject"]},
+}
+
+ORCHESTRATOR_TOOLS = [
+    search_venues,
+    check_availability,
+    search_vendors,
+    estimate_budget,
+    web_search,
+    hold_venue,
+    send_invitations,
+]
+
+
+def _ensure_workspace() -> None:
+    """Create the workspace tree the prompts assume exists."""
+    (WORKSPACE / "events").mkdir(parents=True, exist_ok=True)
+    (WORKSPACE / "memories").mkdir(parents=True, exist_ok=True)
+
+
+def build_backend() -> CompositeBackend:
+    """Compose the on-disk workspace with per-user persistent memory."""
+    _ensure_workspace()
+    return CompositeBackend(
+        default=FilesystemBackend(root_dir=WORKSPACE, virtual_mode=True),
+        routes={"/memories/": StoreBackend(namespace=memory_namespace)},
+    )
+
+
+def build_agent(
+    *,
+    model: str | Any = DEFAULT_MODEL,
+    checkpointer: Any | None = None,
+    store: BaseStore | None = None,
+    hosted: bool = False,
+) -> Any:
+    """Construct the event planning agent.
+
+    Args:
+        model: Model id or a preconfigured chat model.
+        checkpointer: Required for human-in-the-loop approval and for
+            conversation state to survive across `invoke` calls.
+        store: Backing store for `/memories/`. Without one, memory does not
+            persist across threads.
+        hosted: Set only when a host (LangGraph Platform, `langgraph dev`)
+            injects its own checkpointer and store. Suppresses the guard below.
+
+    Returns a compiled LangGraph graph.
+
+    Raises:
+        ValueError: If approval-gated tools are configured without a
+            checkpointer, which would silently disable approval.
+    """
+    if INTERRUPT_ON and checkpointer is None and not hosted:
+        msg = (
+            "interrupt_on is configured but no checkpointer was supplied, so "
+            "approval gates would be silently skipped and hold_venue / "
+            "send_invitations would execute unreviewed. Pass a checkpointer "
+            "(e.g. InMemorySaver()), or hosted=True when the host supplies one."
+        )
+        raise ValueError(msg)
+
+    return create_deep_agent(
+        model=model,
+        tools=ORCHESTRATOR_TOOLS,
+        system_prompt=ORCHESTRATOR_PROMPT,
+        subagents=SUBAGENTS,
+        # Not included by create_deep_agent in 0.7.1 — see module docstring.
+        # Cast: TodoListMiddleware is generic over context, and the checker
+        # treats that parameter as invariant against our PlannerContext.
+        middleware=cast("Any", (TodoListMiddleware(),)),
+        backend=build_backend(),
+        skills=["/skills/"],
+        # Loaded into the system prompt every turn, unlike skills which the
+        # agent opens on demand. Routed to the store, so it outlives the thread.
+        memory=["/memories/AGENTS.md"],
+        interrupt_on=INTERRUPT_ON,
+        context_schema=PlannerContext,
+        checkpointer=checkpointer,
+        store=store,
+        name="event-planner",
+    )
+
+
+def hosted_agent() -> Any:
+    """Factory referenced by `langgraph.json`.
+
+    `langgraph dev` and LangGraph Platform inject their own checkpointer and
+    store, so both are left unset here — passing our own would shadow the
+    host's persistence. This is a factory rather than a module-level graph so
+    that importing this module never builds an agent as a side effect.
+    """
+    return build_agent(hosted=True)

@@ -1,0 +1,14 @@
+# Secrets
+.env
+
+# Agent runtime state — conversation checkpoints and persisted memory
+workspace/.state/
+workspace/events/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
