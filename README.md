@@ -74,11 +74,31 @@ runs with `virtual_mode=True` — the agent cannot read or write its own source.
 Don't repoint `root_dir` at the repo, and don't use this backend in a server
 process handling untrusted input.
 
-`StoreBackend` takes a namespace factory that receives the runtime, so memory
-is scoped per user (`("event_planner", "memories", <user_id>)`). One deployed
-agent serves many planners without leaking memory between them. User ids are
-sanitized first: the store rejects namespace components outside
-`[A-Za-z0-9\-_.@+:~]`, so an unsanitized id would raise mid-run.
+### Tenant isolation
+
+The agent has `ls` / `read_file` / `glob` / `grep` over its filesystem root, so
+anything reachable from that root is readable by every session. Three rules
+follow, each enforced by a test in `tests/test_security.py`:
+
+**State lives outside the root.** Checkpoints and the memory store go in
+`.state/` at the repo root — a *sibling* of `workspace/`, never inside it. A
+database under the agent's root would let any session read every user's
+memories and every thread's history straight out of the raw file, bypassing
+namespacing completely. `--db` is validated against this too, so an operator
+can't reintroduce it.
+
+**Namespace mapping is injective.** Memory is scoped per user via
+`("event_planner", "memories", "u", <component>)`. The store rejects namespace
+components outside `[A-Za-z0-9\-_.@+:~]`, but sanitizing by replacement is
+lossy — `"a/b"` and `"a b"` both collapse to `"a_b"`. A digest of the raw id is
+appended so distinct users never share a namespace, while the readable part
+stays readable (`alice_example.com.9f2a1c…`).
+
+**Missing identity does not fail open.** With no `user_id`, memory falls back
+to the conversation thread rather than a shared `default` bucket, so anonymous
+callers get isolated memory instead of inheriting each other's. Anonymous
+namespaces are tagged distinctly from identified ones, so no real user can ever
+occupy one.
 
 ### Skills vs memory
 
@@ -143,9 +163,11 @@ src/event_planner/
   context.py      per-user memory namespacing
   cli.py          interactive REPL with approval prompts
   tools/          catalog (stub) · budget (real) · bookings (stub) · search (live)
-workspace/
+workspace/        the agent's entire filesystem view
   skills/         venue-sourcing · budget-modeling
   events/         agent working files        (gitignored)
-  .state/         checkpoints + memory       (gitignored)
-tests/            harness tests — approval, memory scoping, tool binding
+.state/           checkpoints + memory       (gitignored, outside agent reach)
+tests/
+  test_harness.py   approval gates, tool binding, config guards
+  test_security.py  tenant isolation — state reachability, namespace collisions
 ```

@@ -1,8 +1,11 @@
 # Secrets
 .env
 
-# Agent runtime state — conversation checkpoints and persisted memory
-workspace/.state/
+# Agent runtime state — conversation checkpoints and persisted memory.
+# Kept outside workspace/ so the agent's filesystem tools cannot read it.
+.state/
+
+# Agent working files
 workspace/events/
 
 # Python

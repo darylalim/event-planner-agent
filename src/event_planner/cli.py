@@ -21,10 +21,16 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.store.sqlite import SqliteStore
 from langgraph.types import Command
 
-from event_planner.agent import DEFAULT_MODEL, WORKSPACE, build_agent
+from event_planner.agent import DEFAULT_MODEL, PROJECT_ROOT, WORKSPACE, build_agent
 from event_planner.context import PlannerContext
 
-STATE_DIR = WORKSPACE / ".state"
+#: Deliberately a sibling of `workspace/`, never inside it. The agent has
+#: `ls`/`read_file`/`glob`/`grep` over its filesystem root, so a database kept
+#: under that root would let any session read every other user's memories and
+#: every other thread's checkpoints straight out of the raw file — defeating
+#: the per-user namespacing entirely. `_check_db_outside_workspace` enforces
+#: this for operator-supplied paths too.
+STATE_DIR = PROJECT_ROOT / ".state"
 
 BANNER = """\
 Event Planner  (Deep Agents)
@@ -173,6 +179,24 @@ def _run_turn(graph: Any, payload: Any, config: dict, context: PlannerContext) -
         payload = Command(resume={"decisions": _collect_decisions(pending)})
 
 
+def _check_db_outside_workspace(db_path: Path) -> None:
+    """Refuse to put agent state where the agent can read it.
+
+    Raises:
+        ValueError: If the database would sit inside the agent's filesystem root.
+    """
+    resolved = db_path.resolve()
+    root = WORKSPACE.resolve()
+    if resolved == root or root in resolved.parents:
+        msg = (
+            f"--db {resolved} is inside the agent's filesystem root ({root}).\n"
+            "The agent can read that directory, so it could read every user's "
+            "memories and every thread's checkpoints out of the raw database. "
+            "Choose a path outside the workspace."
+        )
+        raise ValueError(msg)
+
+
 def _show_memory(store: SqliteStore, user_id: str) -> None:
     from event_planner.context import memory_namespace
 
@@ -212,7 +236,14 @@ def main() -> int:
     args = parser.parse_args()
 
     load_dotenv()
-    Path(args.db).parent.mkdir(parents=True, exist_ok=True)
+
+    db_path = Path(args.db)
+    try:
+        _check_db_outside_workspace(db_path)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    db_path.parent.mkdir(parents=True, exist_ok=True)
 
     with (
         SqliteSaver.from_conn_string(args.db) as checkpointer,

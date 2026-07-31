@@ -14,7 +14,7 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
 from event_planner.agent import build_agent
-from event_planner.context import PlannerContext, memory_namespace
+from event_planner.context import PlannerContext
 
 THREAD = {"configurable": {"thread_id": "t-1"}}
 CTX = PlannerContext(user_id="alice@example.com")
@@ -200,34 +200,4 @@ def test_unlisted_tools_are_not_gated(scripted):
     assert [m for m in result["messages"] if getattr(m, "name", None) == "search_venues"]
 
 
-# --------------------------------------------------------------------------- #
-# memory scoping
-# --------------------------------------------------------------------------- #
-
-
-class _Runtime:
-    def __init__(self, ctx):
-        self.context = ctx
-
-
-def test_memory_namespace_is_per_user():
-    a = memory_namespace(_Runtime(PlannerContext(user_id="alice@example.com")))
-    b = memory_namespace(_Runtime(PlannerContext(user_id="bob@example.com")))
-    assert a != b
-    assert a[:2] == b[:2] == ("event_planner", "memories")
-
-
-def test_memory_namespace_sanitizes_unsafe_ids():
-    """StoreBackend rejects namespace components outside a safe charset.
-
-    An id with a space or slash would otherwise raise mid-run.
-    """
-    ns = memory_namespace(_Runtime(PlannerContext(user_id="a b/c*d")))
-    assert all(
-        ch.isalnum() or ch in "-_.@+:~" for ch in ns[-1]
-    ), f"unsafe component: {ns[-1]!r}"
-
-
-def test_memory_namespace_falls_back_without_context():
-    assert memory_namespace(_Runtime(None))[-1] == "default"
-    assert memory_namespace(object())[-1] == "default"
+# Memory scoping and tenant isolation are covered in tests/test_security.py.
