@@ -13,7 +13,7 @@ what you need to *change code* safely.
 ## Commands
 
 ```bash
-uv sync                                    # install (Python >=3.11, uv required)
+uv sync                                    # install (uv required; .python-version pins 3.14)
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
 uv run pytest                              # 90 tests, ~1.5s, fully offline
@@ -24,10 +24,35 @@ uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
 uv run event-planner                       # interactive CLI
 uv run event-planner --user alice@example.com --thread offsite-2026
 uv run langgraph dev                       # LangGraph Studio (host supplies persistence)
+
+uvx ruff check .                           # lint  — config in pyproject.toml, not a dep
+uvx ty check                               # types — config in pyproject.toml, not a dep
 ```
 
-No linter or type checker is configured, though the source carries ruff `# noqa` codes
-(`BLE001`, `ANN001`). If you add one, run it via `uvx` rather than adding a dep.
+**When working with Python, invoke the relevant `/astral:<skill>` — `/astral:uv`,
+`/astral:ty`, `/astral:ruff` — to ensure best practices are followed.** They carry the
+current guidance for each tool, which is more reliable than working from memory:
+`/astral:uv` for anything touching dependencies, the lockfile, the Python version, or
+how a command is run; `/astral:ruff` before linting or formatting; `/astral:ty` before
+type checking. All three tools are already configured for this repo — see below.
+
+Ruff is configured in `pyproject.toml` but is **not** a dependency — run it with
+`uvx ruff check .`. The rule set is chosen so the `# noqa` codes in the source
+(`BLE001` on the three deliberate blind excepts) suppress rules that are actually
+enabled; `RUF100` fails the check if one goes stale. `ANN401` is ignored because `Any`
+is honest at the deepagents/langgraph boundary, and `tests/*` ignores `ANN`/`RUF012`
+(the fake models are Pydantic subclasses, so their list defaults are fields, not shared
+state). Formatting is not enforced — `uvx ruff format` would rewrite files the linter
+is happy with.
+
+ty is configured the same way and also not a dependency. Its defaults already pass, so
+only `missing-type-argument` is raised to error — restating the defaults would be config
+that checks nothing. `missing-override-decorator` is deliberately left off: satisfying it
+means `@override` on the test fakes, which on 3.11 needs `typing_extensions`, available
+here only transitively. Note ty checks against **3.11**, not the pinned 3.14 — it takes
+the target from `requires-python`, so it catches 3.12+ syntax that would break the floor
+this project claims to support. Both tools are clean; keep them that way rather than
+adding suppressions.
 
 ## Architecture
 

@@ -28,3 +28,45 @@ packages = ["src/event_planner"]
 dev = [
     "pytest>=9.1.1",
 ]
+
+# Ruff is deliberately NOT a dependency — run `uvx ruff check .`. Do NOT run
+# `uvx ruff format`: formatting is not enforced here and it rewrites files the
+# linter is happy with. Rationale for the choices below lives in CLAUDE.md;
+# keep it there rather than restating it, so the two cannot drift.
+[tool.ruff]
+# Ruff's default is 88, so this is a deliberate loosening, fitted to the code:
+# the longest existing line is 98. Chosen so E501 can be enabled as a live rule
+# instead of being ignored, at the cost of permitting 2 more characters.
+line-length = 100
+
+[tool.ruff.lint]
+# BLE is here so the three `# noqa: BLE001` directives in the source suppress a
+# rule that is actually enabled, and RUF (which carries RUF100) fails the check
+# if one of them ever goes stale.
+select = ["E", "F", "I", "UP", "B", "BLE", "ANN", "RUF"]
+# `Any` is deliberate at the deepagents/langgraph boundary: `create_deep_agent`
+# returns an untyped compiled graph and the runtime passed to the namespace
+# factories has no public type. Annotating them honestly means `Any`.
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+# ANN: test fixtures are untyped by convention.
+# RUF012: the fake models subclass `GenericFakeChatModel`, which is a Pydantic
+# BaseModel, so `replies: list[AIMessage] = []` is a field that Pydantic
+# deep-copies per instance — not a shared mutable class default. Ruff cannot
+# see through the base class to tell the difference.
+"tests/*" = ["ANN", "RUF012"]
+
+# ty is likewise not a dependency — run it with `uvx ty check`. It infers the
+# target version from `requires-python`, so it checks against 3.11, the floor
+# this project claims, NOT the 3.14 in `.python-version`. That is the useful
+# direction: it catches 3.12+ syntax or APIs that would break the declared
+# minimum. Only the rule below is raised above ty's defaults; the defaults
+# already pass, so restating them here would be config that checks nothing.
+[tool.ty.rules]
+# Bare `dict`/`tuple`/`list` annotations. Off by default, and it found three
+# real ones. `missing-override-decorator` is deliberately NOT enabled: it wants
+# `@override` on the test fakes, which on 3.11 means importing
+# `typing_extensions` — available only transitively here, so honouring the rule
+# would mean declaring a new dependency to annotate four test methods.
+missing-type-argument = "error"

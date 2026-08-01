@@ -33,7 +33,7 @@ class ScriptedModel(GenericFakeChatModel):
         self.bound_tools.extend(getattr(t, "name", str(t)) for t in tools)
         return self
 
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # noqa: ANN001
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         reply = (
             self.responses.pop(0)
             if self.responses

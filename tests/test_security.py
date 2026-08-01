@@ -28,7 +28,7 @@ class _Runtime:
 class _ScriptedWriter(GenericFakeChatModel):
     """Fake model that plays back a fixed reply sequence."""
 
-    replies: list = []
+    replies: list[AIMessage] = []
 
     def __init__(self, replies, **kwargs):
         super().__init__(messages=iter([]), **kwargs)
@@ -37,7 +37,7 @@ class _ScriptedWriter(GenericFakeChatModel):
     def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
         return self
 
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # noqa: ANN001
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         reply = self.replies.pop(0) if self.replies else AIMessage(content="done")
         return ChatResult(generations=[ChatGeneration(message=reply)])
 

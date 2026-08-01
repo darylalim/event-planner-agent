@@ -87,7 +87,7 @@ def test_marginal_cost_is_zero_below_a_vendor_minimum():
         catering_minimum_headcount=60,
         service_charge_pct=22,
     )
-    marginal = next(l for l in result.splitlines() if "Marginal cost" in l)
+    marginal = next(line for line in result.splitlines() if "Marginal cost" in line)
     assert "$        0.00" in marginal or "0.00" in marginal.split("$")[-1]
     assert "already paid for" in result
     assert "beyond that each guest costs" in result
@@ -102,8 +102,39 @@ def test_marginal_cost_is_the_per_head_rate_at_or_above_the_minimum():
         catering_minimum_headcount=60,
         service_charge_pct=22,
     )
-    marginal = next(l for l in result.splitlines() if "Marginal cost" in l)
+    marginal = next(line for line in result.splitlines() if "Marginal cost" in line)
     assert "72.96" in marginal
+
+
+def test_the_minimum_waste_is_priced_at_the_same_rate_as_a_marginal_guest():
+    """The waste figure and the marginal-cost line describe the same guests.
+
+    They used to disagree: the waste was computed from the bare per-head rate
+    while the marginal cost carried the service charge and contingency, so the
+    note said 20 unneeded covers cost $1,280 and the line below valued each of
+    those seats at $89.79 (20 x $89.79 = $1,795.84). Asserting the relationship
+    rather than a literal dollar amount keeps this honest when rates change.
+    """
+    headcount, minimum, per_person = 40, 60, 64.0
+    service_pct, contingency_pct = 22.0, 15.0
+    result = _call(
+        estimate_budget,
+        headcount=headcount,
+        venue_total_usd=3000,
+        catering_per_person_usd=per_person,
+        catering_minimum_headcount=minimum,
+        service_charge_pct=service_pct,
+        contingency_pct=contingency_pct,
+    )
+
+    free_seats = minimum - headcount
+    loaded_rate = per_person * (1 + service_pct / 100) * (1 + contingency_pct / 100)
+    expected = f"${free_seats * loaded_rate:,.0f}"
+
+    note = next(line for line in result.splitlines() if "covers you do not need" in line)
+    assert expected in note, f"expected {expected} in {note!r}"
+    # ...and the bare-rate figure must NOT be what is reported.
+    assert f"${free_seats * per_person:,.0f}" not in note
 
 
 @pytest.mark.parametrize(

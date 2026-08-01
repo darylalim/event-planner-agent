@@ -19,6 +19,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.store.base import SearchItem
 from langgraph.store.sqlite import SqliteStore
 from langgraph.types import Command
 
@@ -258,7 +259,9 @@ def _prompt_one(action: dict[str, Any], allowed: list[str]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-def _run_turn(graph: Any, payload: Any, config: dict, context: PlannerContext) -> None:
+def _run_turn(
+    graph: Any, payload: Any, config: dict[str, Any], context: PlannerContext
+) -> None:
     """Stream one turn, pausing for approval as many times as needed."""
     while True:
         pending: Any = None
@@ -325,8 +328,15 @@ def _check_db_outside_workspace(db_path: Path) -> None:
         raise ValueError(msg)
 
 
-def _stored(store: SqliteStore, user_id: str | None, kind: str) -> tuple:
-    """List one kind of stored item for a user, plus the namespace used."""
+def _stored(
+    store: SqliteStore, user_id: str | None, kind: str
+) -> tuple[tuple[SearchItem, ...], tuple[str, ...]]:
+    """List one kind of stored item for a user, plus the namespace used.
+
+    Typed concretely rather than as `Any`: callers reach `item.key`, and
+    `_export` treats that key as untrusted input to a filesystem write. An
+    `Any` element type would let a rename upstream pass unchecked.
+    """
     if user_id is None:
         return (), ()
     namespace = namespace_for_user(user_id, kind)

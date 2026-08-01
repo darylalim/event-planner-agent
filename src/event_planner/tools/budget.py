@@ -53,24 +53,35 @@ def estimate_budget(
     contingency = subtotal * (contingency_pct / 100.0)
     total = subtotal + contingency
 
-    minimum_note = ""
-    if billed_covers > headcount:
-        wasted = (billed_covers - headcount) * catering_per_person_usd
-        minimum_note = (
-            f"  ! Catering is billed at the {catering_minimum_headcount}-guest minimum,\n"
-            f"    not {headcount}. You are paying ${wasted:,.0f} for covers you do not need —\n"
-            f"    adding {catering_minimum_headcount - headcount} guests costs nothing extra."
-        )
-
-    # Below a vendor minimum the next guests are already paid for, so their
-    # marginal cost is zero — quoting the per-head rate here would contradict
-    # the minimum note printed a few lines above in this same output.
+    # The loaded per-guest rate: catering plus the service charge and
+    # contingency that every other catering dollar in this breakdown carries.
+    # Both the waste figure and the marginal-cost line are derived from it, so
+    # they cannot end up pricing the same guests two different ways — which is
+    # exactly what happened when the waste was computed from the bare rate: it
+    # reported 20 unneeded covers as $1,280 while the line eight rows below
+    # valued each of those same seats at $89.79.
     marginal = (
         catering_per_person_usd
         * (1 + service_charge_pct / 100.0)
         * (1 + contingency_pct / 100.0)
     )
-    free_headroom = max(0, catering_minimum_headcount - headcount)
+
+    # `billed_covers` is a max() against headcount, so this is never negative.
+    # Derived once and used by both branches below: computing "are we under the
+    # minimum?" separately in two places is what let them disagree.
+    free_headroom = billed_covers - headcount
+
+    minimum_note = ""
+    if free_headroom:
+        wasted = free_headroom * marginal
+        minimum_note = (
+            f"  ! Catering is billed at the {catering_minimum_headcount}-guest "
+            f"minimum, not {headcount}.\n"
+            f"    You are paying ${wasted:,.0f} for covers you do not need, all-in\n"
+            f"    (catering + service charge + contingency) — adding those "
+            f"{free_headroom} guests\n"
+            f"    costs nothing extra."
+        )
 
     label_width = 32
 
@@ -109,8 +120,12 @@ def estimate_budget(
     if free_headroom:
         lines += [
             row("Marginal cost per extra guest", 0.0, decimals=2),
-            f"    (the next {free_headroom} guest(s) are already paid for under the "
-            f"{catering_minimum_headcount}-guest minimum;",
+            # Parenthesized so the concatenation reads as one deliberate output
+            # line rather than a list entry with a forgotten comma.
+            (
+                f"    (the next {free_headroom} guest(s) are already paid for under the "
+                f"{catering_minimum_headcount}-guest minimum;"
+            ),
             f"     beyond that each guest costs ${marginal:,.2f})",
         ]
     else:

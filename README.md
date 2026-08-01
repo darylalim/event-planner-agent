@@ -23,7 +23,11 @@ Event planning hits nearly every condition the harness exists for:
 
 ## Setup
 
-Requires Python ≥ 3.11 and [uv](https://docs.astral.sh/uv/).
+Requires [uv](https://docs.astral.sh/uv/). Two separate Python versions are
+declared, and they do different jobs: `pyproject.toml` sets `>=3.11` as the
+compatibility floor, while `.python-version` pins *development* to 3.14 so every
+checkout builds the same environment. `uv sync` provisions the pinned
+interpreter automatically; change it with `uv python pin <version>`.
 
 ```bash
 uv sync
