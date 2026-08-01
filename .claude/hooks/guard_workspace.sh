@@ -7,23 +7,25 @@
 # ls/read_file/glob/grep, so anything that lands there is readable by every
 # planner. Only shared reference material (skills) belongs on it.
 set -uo pipefail
+_hook_common="$(dirname "$0")/_common.sh"
+[ -r "$_hook_common" ] || {
+  echo "hook: cannot read $_hook_common; refusing rather than running unguarded." >&2
+  exit 2
+}
+. "$_hook_common"
 
-input=$(cat)
-path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty')
-[ -n "$path" ] || exit 0
+[ -n "$HOOK_PATH" ] || exit 0
+[ -n "$HOOK_ROOT" ] || exit 0
 
-root=${CLAUDE_PROJECT_DIR:-$(printf '%s' "$input" | jq -r '.cwd // empty')}
-[ -n "$root" ] || exit 0
-case "$path" in /*) ;; *) path="$root/$path" ;; esac
+# Anchored on this project's workspace/, not a bare */workspace/* glob: the
+# glob blocks every edit in a checkout that happens to live under ~/workspace/.
+ws="$HOOK_ROOT/workspace"
 
-# Anchored on this project's workspace/, not a bare */workspace/* glob: a
-# checkout living under ~/workspace/ would otherwise block every edit in it.
-ws="$root/workspace"
+hook_under "$HOOK_PATH" "$ws" || exit 0
+# Skills are the one thing that belongs here: shared, versioned, no user data.
+hook_under "$HOOK_PATH" "$ws/skills" && exit 0
 
-case "$path" in
-  "$ws"/skills/*) exit 0 ;;
-  "$ws" | "$ws"/*)
-    cat >&2 <<'MSG'
+cat >&2 <<'MSG'
 Blocked: workspace/ is the agent's filesystem root and is SHARED across every
 session and every user. The agent has ls/read_file/glob/grep over it, and the
 root is a single static path, so anything placed here is readable by every
@@ -43,8 +45,4 @@ Only shared reference material belongs here -- workspace/skills/.
 Enforced at test time by test_shared_filesystem_root_holds_only_reference_material
 in tests/test_security.py; this hook stops it before the file exists.
 MSG
-    exit 2
-    ;;
-esac
-
-exit 0
+exit 2

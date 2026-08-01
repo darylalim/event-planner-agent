@@ -1,12 +1,35 @@
 #!/usr/bin/env bash
-# PreToolUse: refuse hand-edits to files that may only change via tooling.
+# PreToolUse: refuse hand-edits to files that may only change via tooling, and
+# to the guard configuration itself.
 set -uo pipefail
+_hook_common="$(dirname "$0")/_common.sh"
+[ -r "$_hook_common" ] || {
+  echo "hook: cannot read $_hook_common; refusing rather than running unguarded." >&2
+  exit 2
+}
+. "$_hook_common"
 
-input=$(cat)
-path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty')
-[ -n "$path" ] || exit 0
+[ -n "$HOOK_PATH" ] || exit 0
 
-case "$(basename "$path")" in
+# The guards must not be editable by the thing they guard: one edit to
+# settings.json emptying `hooks`, or an `exit 0` at the top of any script here,
+# silently disables every other rule in this directory. Changing them is a
+# deliberate operator action.
+if [ -n "$HOOK_ROOT" ] && hook_under "$HOOK_PATH" "$HOOK_ROOT/.claude"; then
+  cat >&2 <<'MSG'
+Blocked: .claude/ configures the guards themselves. Editing it from inside a
+session is how every other rule in this directory gets disabled by accident --
+emptying `hooks` in settings.json, or an early `exit 0` in a guard script,
+leaves .env, uv.lock, .python-version and workspace/ unprotected from the next
+tool call onward, with nothing in the output to say so.
+
+If the change is intended, the operator should make it directly (the files are
+ordinary text), or temporarily remove the hook from .claude/settings.json.
+MSG
+  exit 2
+fi
+
+case "$(basename "$HOOK_PATH")" in
   .env.example)
     # The tracked template is the file you are meant to edit.
     exit 0
