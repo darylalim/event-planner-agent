@@ -165,6 +165,20 @@ _VENDORS: list[dict[str, Any]] = [
 ]
 
 
+def venue_by_id(venue_id: str) -> dict[str, Any] | None:
+    """Look up a venue record, or None. Shared with the booking tools."""
+    return next((v for v in _VENUES if v["id"] == venue_id), None)
+
+
+def known_venue_ids() -> list[str]:
+    return [v["id"] for v in _VENUES]
+
+
+def is_booked(venue_id: str, iso_date: str) -> bool:
+    venue = venue_by_id(venue_id)
+    return bool(venue) and iso_date in set(venue["booked_dates"])
+
+
 @tool
 def search_venues(
     city: str,
@@ -192,9 +206,16 @@ def search_venues(
         and (style is None or v["style"].lower() == style.lower())
     ]
     if not matches:
+        # `is not None`, not truthiness: the filter above treats 0 as a real
+        # ceiling, so a truthy test would hide the very constraint that
+        # produced the empty result.
         return (
             f"No venues in {city} match capacity >= {min_capacity}"
-            + (f", day rate <= ${max_day_rate_usd:,.0f}" if max_day_rate_usd else "")
+            + (
+                f", day rate <= ${max_day_rate_usd:,.0f}"
+                if max_day_rate_usd is not None
+                else ""
+            )
             + (f", style '{style}'" if style else "")
             + ". Try relaxing capacity or raising the rate ceiling."
         )
@@ -233,17 +254,22 @@ def check_availability(venue_id: str, event_date: str) -> str:
     except ValueError:
         return f"Could not parse event_date '{event_date}'. Use ISO format, e.g. 2026-09-19."
 
+    # Compare the *normalized* date, never the raw string. `fromisoformat`
+    # accepts basic ("20260919") and week ("2026-W38-6") forms, so matching the
+    # input against canonical booked_dates would report a booked venue as free
+    # while listing that same date as booked two lines below.
+    canonical = parsed.isoformat()
     booked = set(venue["booked_dates"])
     same_month = sorted(
         d for d in booked if d.startswith(f"{parsed.year:04d}-{parsed.month:02d}")
     )
-    if event_date in booked:
+    if canonical in booked:
         return (
-            f"{venue['name']} is NOT available on {event_date}.\n"
+            f"{venue['name']} is NOT available on {canonical}.\n"
             f"Other bookings that month: {', '.join(same_month) or 'none'}"
         )
     return (
-        f"{venue['name']} IS available on {event_date} at ${venue['day_rate_usd']:,}/day.\n"
+        f"{venue['name']} IS available on {canonical} at ${venue['day_rate_usd']:,}/day.\n"
         f"Already booked that month: {', '.join(same_month) or 'none'}"
     )
 

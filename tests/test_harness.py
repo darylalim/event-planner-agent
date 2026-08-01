@@ -20,9 +20,18 @@ from event_planner.context import PlannerContext
 THREAD = {"configurable": {"thread_id": "t-1"}}
 CTX = PlannerContext(user_id="alice@example.com")
 
-#: Middleware nodes that run once per turn rather than per tool round trip.
-_BEFORE_AGENT_NODES = 3  # Skills, PatchToolCalls, Memory
-_AFTER_MODEL_NODES = 2  # HumanInTheLoop, TodoList
+#: Measured step model, from the live node sequence:
+#:
+#:   3 x before_agent            once per turn   (Skills, PatchToolCalls, Memory)
+#:   model + 2 x after_model     per model call  (HumanInTheLoop, TodoList)
+#:   tools                       per round trip
+#:
+#: N tool round trips cost 3 + 3(N+1) + N = 6 + 4N steps. after_model nodes run
+#: on *every* model call, not once per turn, so subtracting them a single time
+#: as fixed overhead — as an earlier version did — misattributes one model
+#: turn's worth of cost.
+_FIXED_OVERHEAD = 6  # 3 before_agent + the final model call's 3 nodes
+_STEPS_PER_ROUND_TRIP = 4
 
 
 def _agent(model, store=None):
@@ -287,10 +296,15 @@ def test_step_budget_survives_a_long_planning_session(scripted):
         )
     )
 
-    # One tool round trip, plus the one-off before_agent nodes.
+    # This run is exactly one tool round trip, so steps == 6 + 4.
     assert steps > 2, "step accounting looks wrong; middleware may not be running"
-    per_round_trip = max(1, steps - _BEFORE_AGENT_NODES - _AFTER_MODEL_NODES)
-    affordable = DEFAULT_MAX_STEPS // per_round_trip
+    per_round_trip = max(1, steps - _FIXED_OVERHEAD)
+    assert per_round_trip == _STEPS_PER_ROUND_TRIP, (
+        f"middleware changed: a tool round trip now costs {per_round_trip} steps, "
+        f"not {_STEPS_PER_ROUND_TRIP}. Re-check DEFAULT_MAX_STEPS."
+    )
+
+    affordable = (DEFAULT_MAX_STEPS - _FIXED_OVERHEAD) // per_round_trip
     assert affordable >= 30, (
         f"budget of {DEFAULT_MAX_STEPS} affords only ~{affordable} tool round "
         f"trips at {per_round_trip} steps each — too few for a planning session"

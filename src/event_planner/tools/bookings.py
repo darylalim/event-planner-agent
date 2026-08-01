@@ -9,8 +9,11 @@ on the day the stubs are swapped for real APIs.
 from __future__ import annotations
 
 import hashlib
+from datetime import date as _date
 
 from langchain.tools import tool
+
+from event_planner.tools.catalog import is_booked, known_venue_ids, venue_by_id
 
 
 def _reference(prefix: str, *parts: str) -> str:
@@ -40,13 +43,44 @@ def hold_venue(
     Returns a hold reference and the terms. A hold is not a booking, but it does
     start a deposit clock — confirm the date and cost before calling this.
     """
-    ref = _reference("HOLD", venue_id, event_date, client_name)
+    # Validate before returning a confident success string. `check_availability`
+    # rejects an unknown venue_id; the tool that commits the client's money must
+    # be at least as strict, or an approved hold can land on a hallucinated
+    # venue or a date the venue is already booked — and the operator approving
+    # it sees only well-formed confirmation text.
+    venue = venue_by_id(venue_id)
+    if venue is None:
+        return (
+            f"REFUSED: unknown venue_id '{venue_id}'. No hold was placed.\n"
+            f"Known ids: {', '.join(known_venue_ids())}"
+        )
+    try:
+        canonical = _date.fromisoformat(event_date).isoformat()
+    except ValueError:
+        return (
+            f"REFUSED: could not parse event_date '{event_date}'. No hold was "
+            f"placed. Use ISO format, e.g. 2026-09-19."
+        )
+    if is_booked(venue_id, canonical):
+        return (
+            f"REFUSED: {venue['name']} is already booked on {canonical}. "
+            f"No hold was placed. Re-check availability and pick another date."
+        )
+    if headcount > venue["capacity"]:
+        return (
+            f"REFUSED: {headcount} guests exceeds {venue['name']}'s capacity of "
+            f"{venue['capacity']}. No hold was placed."
+        )
+    if total_cost_usd <= 0:
+        return f"REFUSED: total_cost_usd must be positive, got {total_cost_usd}."
+
+    ref = _reference("HOLD", venue_id, canonical, client_name)
     deposit = total_cost_usd * 0.25
     return (
         f"[STUB] Provisional hold placed.\n"
         f"  Reference:   {ref}\n"
-        f"  Venue:       {venue_id}\n"
-        f"  Date:        {event_date}\n"
+        f"  Venue:       {venue['name']} ({venue_id})\n"
+        f"  Date:        {canonical}\n"
         f"  Headcount:   {headcount}\n"
         f"  Client:      {client_name}\n"
         f"  Total quoted: ${total_cost_usd:,.2f}\n"

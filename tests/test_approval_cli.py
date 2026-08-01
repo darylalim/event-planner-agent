@@ -132,6 +132,37 @@ def test_eof_rejection_is_also_framed_as_a_decision(answers):
     assert "not performed" in message.lower()
 
 
+@pytest.mark.parametrize(
+    ("script", "where"),
+    [
+        (("r",), "the reject reason"),
+        (("e",), "the edit args"),
+        (("res",), "the respond text"),
+    ],
+)
+def test_stdin_closing_mid_decision_still_fails_closed(answers, script, where):
+    """The EOF guard used to wrap only the menu read.
+
+    Closing stdin after choosing an option but before typing the follow-up
+    raised EOFError straight out of the function, unwound past the fail-closed
+    path, and abandoned the pending approval — the opposite of refusing.
+    """
+    answers(*script)
+    decision = _prompt_one(ACTION, ALL_FOUR)
+    assert decision["type"] == "reject", f"EOF at {where} did not fail closed"
+    assert "not performed" in decision["message"].lower()
+
+
+def test_an_unhandled_decision_type_does_not_loop_forever(answers, capsys):
+    """`allowed` comes from middleware config and may name a decision this CLI
+    cannot build. Without a fallback branch the loop re-printed the menu
+    forever with no message, and the only exit abandoned the approval."""
+    answers("teleport", "approve")
+    decision = _prompt_one(ACTION, ["approve", "teleport"])
+    assert decision == {"type": "approve"}
+    assert "cannot construct" in capsys.readouterr().out
+
+
 def test_ambiguous_then_specific_reaches_reject(answers):
     """'r' is ambiguous with respond allowed; the retry must land on reject."""
     answers("r", "rej", "Not yet.")

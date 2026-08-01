@@ -62,8 +62,15 @@ def estimate_budget(
             f"    adding {catering_minimum_headcount - headcount} guests costs nothing extra."
         )
 
-    marginal = catering_per_person_usd * (1 + service_charge_pct / 100.0)
-    marginal_with_contingency = marginal * (1 + contingency_pct / 100.0)
+    # Below a vendor minimum the next guests are already paid for, so their
+    # marginal cost is zero — quoting the per-head rate here would contradict
+    # the minimum note printed a few lines above in this same output.
+    marginal = (
+        catering_per_person_usd
+        * (1 + service_charge_pct / 100.0)
+        * (1 + contingency_pct / 100.0)
+    )
+    free_headroom = max(0, catering_minimum_headcount - headcount)
 
     label_width = 32
 
@@ -85,7 +92,7 @@ def estimate_budget(
             f"Catering ({billed_covers} covers @ ${catering_per_person_usd:,.2f})",
             catering_base,
         ),
-        row(f"Service charge ({service_charge_pct:.0f}%)", service_charge),
+        row(f"Service charge ({service_charge_pct:g}%)", service_charge),
         row("Variable subtotal", variable),
     ]
     if minimum_note:
@@ -94,12 +101,24 @@ def estimate_budget(
         "",
         "TOTALS",
         row("Subtotal", subtotal),
-        row(f"Contingency ({contingency_pct:.0f}%)", contingency),
+        row(f"Contingency ({contingency_pct:g}%)", contingency),
         row("TOTAL", total),
         "",
         row("Cost per guest", total / headcount, decimals=2),
-        row("Marginal cost per extra guest", marginal_with_contingency, decimals=2),
-        "    (catering + service charge + contingency; fixed costs unaffected)",
+    ]
+    if free_headroom:
+        lines += [
+            row("Marginal cost per extra guest", 0.0, decimals=2),
+            f"    (the next {free_headroom} guest(s) are already paid for under the "
+            f"{catering_minimum_headcount}-guest minimum;",
+            f"     beyond that each guest costs ${marginal:,.2f})",
+        ]
+    else:
+        lines += [
+            row("Marginal cost per extra guest", marginal, decimals=2),
+            "    (catering + service charge + contingency; fixed costs unaffected)",
+        ]
+    lines += [
         "",
         'Not included unless entered under "Other": gratuity, load-in/out overtime,',
         "insurance, permits, shipping, and weather contingency. Confirm each before",

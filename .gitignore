@@ -1,12 +1,12 @@
 # Secrets
 .env
 
-# Agent runtime state — conversation checkpoints and persisted memory.
+# Agent runtime state — checkpoints, per-user memory, and event files.
 # Kept outside workspace/ so the agent's filesystem tools cannot read it.
 .state/
 
-# Agent working files
-workspace/events/
+# Event files written out by the CLI's /export command
+exports/
 
 # Python
 __pycache__/

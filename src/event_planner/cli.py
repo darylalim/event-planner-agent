@@ -23,7 +23,7 @@ from langgraph.store.sqlite import SqliteStore
 from langgraph.types import Command
 
 from event_planner.agent import DEFAULT_MODEL, PROJECT_ROOT, WORKSPACE, build_agent
-from event_planner.context import PlannerContext
+from event_planner.context import PlannerContext, namespace_for_user
 
 #: Deliberately a sibling of `workspace/`, never inside it. The agent has
 #: `ls`/`read_file`/`glob`/`grep` over its filesystem root, so a database kept
@@ -44,7 +44,9 @@ DEFAULT_MAX_STEPS = 200
 BANNER = """\
 Event Planner  (Deep Agents)
   thread: {thread}   user: {user}   model: {model}
-  Type your event brief. /exit to quit, /state to inspect saved memory.
+  Type your event brief.
+  /state   what is stored for this user     /export  write event files to disk
+  /exit    quit
 """
 
 
@@ -119,6 +121,18 @@ def _collect_decisions(interrupts: Any) -> list[dict[str, Any]]:
     return decisions
 
 
+class _OperatorAbsent(Exception):
+    """stdin closed while a decision was being collected."""
+
+
+def _ask(prompt: str) -> str:
+    """Read one line, converting a closed stdin into a typed signal."""
+    try:
+        return input(prompt).strip()
+    except EOFError as exc:
+        raise _OperatorAbsent from exc
+
+
 def _decline_message(reason: str) -> str:
     """Frame a rejection as a human decision, not a tool failure.
 
@@ -168,55 +182,75 @@ def _prompt_one(action: dict[str, Any], allowed: list[str]) -> dict[str, Any]:
         f"[{(p := _unique_prefix(d, allowed))}]{d[len(p):]}" for d in allowed
     )
 
-    while True:
-        try:
-            raw = input(f"  {hint} > ").strip().lower()
-        except EOFError:
-            print("\n  no input available — rejecting for safety")
-            return {
-                "type": "reject",
-                "message": _decline_message(
-                    "No operator was available to review this action."
-                ),
-            }
+    # One guard for every read in this decision, not just the menu. A closed
+    # stdin partway through — after choosing "reject" but before typing the
+    # reason — used to raise EOFError out of the function, unwind past the
+    # fail-closed path, and abandon the pending approval entirely.
+    try:
+        while True:
+            raw = _ask(f"  {hint} > ").lower()
 
-        choice = _resolve_choice(raw, allowed)
-        if choice is None:
-            if raw and any(o.startswith(raw) for o in allowed):
-                candidates = [o for o in allowed if o.startswith(raw)]
-                print(f"  {raw!r} is ambiguous — did you mean {' or '.join(candidates)}?")
-            else:
-                print(f"  Enter one of: {', '.join(allowed)}")
-            continue
-
-        if choice == "approve":
-            return {"type": "approve"}
-
-        if choice == "reject":
-            reason = input("  reason (fed back to the agent): ").strip()
-            return {"type": "reject", "message": _decline_message(reason)}
-
-        if choice == "respond":
-            return {"type": "respond", "message": input("  response: ").strip()}
-
-        if choice == "edit":
-            print(f"  current args: {json.dumps(action.get('args', {}), indent=2)}")
-            edited = input("  new args as JSON (blank to cancel): ").strip()
-            if not edited:
+            choice = _resolve_choice(raw, allowed)
+            if choice is None:
+                if raw and any(o.startswith(raw) for o in allowed):
+                    candidates = [o for o in allowed if o.startswith(raw)]
+                    print(
+                        f"  {raw!r} is ambiguous — did you mean "
+                        f"{' or '.join(candidates)}?"
+                    )
+                else:
+                    print(f"  Enter one of: {', '.join(allowed)}")
                 continue
-            try:
-                args = json.loads(edited)
-            except json.JSONDecodeError as exc:
-                print(f"  not valid JSON ({exc.msg}) — try again")
-                continue
-            if not isinstance(args, dict):
-                print("  args must be a JSON object")
-                continue
-            return {
-                "type": "edit",
-                "edited_action": {"name": action["name"], "args": args},
-            }
-    # unreachable
+
+            if choice == "approve":
+                return {"type": "approve"}
+
+            if choice == "reject":
+                return {
+                    "type": "reject",
+                    "message": _decline_message(
+                        _ask("  reason (fed back to the agent): ")
+                    ),
+                }
+
+            if choice == "respond":
+                return {"type": "respond", "message": _ask("  response: ")}
+
+            if choice == "edit":
+                print(f"  current args: {json.dumps(action.get('args', {}), indent=2)}")
+                edited = _ask("  new args as JSON (blank to cancel): ")
+                if not edited:
+                    continue
+                try:
+                    args = json.loads(edited)
+                except json.JSONDecodeError as exc:
+                    print(f"  not valid JSON ({exc.msg}) — try again")
+                    continue
+                if not isinstance(args, dict):
+                    print("  args must be a JSON object")
+                    continue
+                return {
+                    "type": "edit",
+                    "edited_action": {"name": action["name"], "args": args},
+                }
+
+            # `allowed` comes from middleware config and may name a decision
+            # this prompt has no handler for. Without this branch, `choice` is
+            # non-None so neither error message prints and none of the returns
+            # fire — the loop re-prints the menu forever with no diagnostic and
+            # the only exit abandons the pending approval.
+            print(
+                f"  {choice!r} is allowed by the agent but this CLI cannot "
+                f"construct it. Choose another option, or use the API directly."
+            )
+    except _OperatorAbsent:
+        print("\n  no input available — rejecting for safety")
+        return {
+            "type": "reject",
+            "message": _decline_message(
+                "No operator was available to review this action."
+            ),
+        }
 
 
 # --------------------------------------------------------------------------- #
@@ -291,21 +325,56 @@ def _check_db_outside_workspace(db_path: Path) -> None:
         raise ValueError(msg)
 
 
-def _show_memory(store: SqliteStore, user_id: str) -> None:
-    from event_planner.context import memory_namespace
+def _stored(store: SqliteStore, user_id: str | None, kind: str) -> tuple:
+    """List one kind of stored item for a user, plus the namespace used."""
+    if user_id is None:
+        return (), ()
+    namespace = namespace_for_user(user_id, kind)
+    return tuple(store.search(namespace)), namespace
 
-    class _Fake:  # minimal stand-in: the factory only reads `.context`
-        context = PlannerContext(user_id=user_id)
 
-    namespace = memory_namespace(_Fake())
-    items = list(store.search(namespace))
-    if not items:
-        print(f"\n  no memories stored yet under {namespace}\n")
+def _show_memory(store: SqliteStore, user_id: str | None) -> None:
+    if user_id is None:
+        print("\n  no --user given, so storage is scoped to this thread only.")
+        print("  Pass --user <id> for memory that carries across threads.\n")
         return
-    print(f"\n  memories under {namespace}:")
-    for item in items:
-        print(f"    - {item.key}")
+    for kind in ("memories", "events"):
+        items, namespace = _stored(store, user_id, kind)
+        if not items:
+            print(f"\n  no {kind} stored yet under {namespace}")
+            continue
+        print(f"\n  {kind} under {namespace}:")
+        for item in items:
+            size = len((item.value or {}).get("content", "") or "")
+            print(f"    - {item.key}  ({size:,} bytes)")
     print()
+
+
+def _export(store: SqliteStore, user_id: str | None, destination: Path) -> None:
+    """Write this user's event files to disk.
+
+    Event files live in the store rather than on the shared filesystem root so
+    they cannot leak between planners, which means they are not browsable by
+    default. This puts a copy where a human can read it, on request.
+    """
+    if user_id is None:
+        print("\n  /export needs --user to know whose files to write.\n")
+        return
+    items, _ = _stored(store, user_id, "events")
+    if not items:
+        print("\n  nothing to export yet.\n")
+        return
+    written = 0
+    for item in items:
+        content = (item.value or {}).get("content")
+        if content is None:
+            continue
+        target = destination / user_id / item.key.lstrip("/")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        print(f"    wrote {target}")
+        written += 1
+    print(f"\n  exported {written} file(s).\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -318,8 +387,13 @@ def main() -> int:
     parser.add_argument("--thread", default="default", help="Conversation thread id.")
     parser.add_argument(
         "--user",
-        default="default",
-        help="Scopes persistent memory. Different users get isolated memory.",
+        default=None,
+        help=(
+            "Scopes persistent storage. Different users get isolated memory and "
+            "event files. Omit it and storage is scoped to this thread instead "
+            "— deliberately, since a shared placeholder id would merge every "
+            "unidentified operator into one bucket."
+        ),
     )
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
     parser.add_argument(
@@ -363,7 +437,13 @@ def main() -> int:
         }
         context = PlannerContext(user_id=args.user)
 
-        print(BANNER.format(thread=args.thread, user=args.user, model=args.model))
+        print(
+            BANNER.format(
+                thread=args.thread,
+                user=args.user or "(none — storage scoped to this thread)",
+                model=args.model,
+            )
+        )
 
         while True:
             try:
@@ -378,6 +458,9 @@ def main() -> int:
                 return 0
             if line == "/state":
                 _show_memory(store, args.user)
+                continue
+            if line == "/export":
+                _export(store, args.user, PROJECT_ROOT / "exports")
                 continue
 
             try:

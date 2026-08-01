@@ -35,10 +35,11 @@ from deepagents.backends import CompositeBackend, FilesystemBackend, StoreBacken
 from langchain.agents.middleware import TodoListMiddleware
 from langgraph.store.base import BaseStore
 
-from event_planner.context import PlannerContext, memory_namespace
+from event_planner.context import PlannerContext, events_namespace, memory_namespace
 from event_planner.prompts import ORCHESTRATOR_PROMPT
 from event_planner.subagents import SUBAGENTS
 from event_planner.tools import (
+    IRREVERSIBLE_TOOLS,
     check_availability,
     estimate_budget,
     hold_venue,
@@ -56,12 +57,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 #: Everything the agent can see on disk. Deliberately not the repo root.
 WORKSPACE = PROJECT_ROOT / "workspace"
 
-#: Tools that spend money or contact guests, and the decisions allowed on each.
-#: `respond` is omitted: a free-text reply to a booking request invites the
-#: model to treat commentary as confirmation. Approve it, fix it, or refuse it.
+#: Decisions an operator may take on a gated tool. `respond` is omitted: a
+#: free-text reply to a booking request invites the model to treat commentary
+#: as confirmation. Approve it, fix it, or refuse it.
+ALLOWED_DECISIONS = ["approve", "edit", "reject"]
+
+#: Derived from IRREVERSIBLE_TOOLS rather than restated. Two hand-maintained
+#: copies of "which tools spend money" means adding a third booking tool to one
+#: and not the other silently ships it un-gated.
 INTERRUPT_ON: dict[str, Any] = {
-    "hold_venue": {"allowed_decisions": ["approve", "edit", "reject"]},
-    "send_invitations": {"allowed_decisions": ["approve", "edit", "reject"]},
+    name: {"allowed_decisions": ALLOWED_DECISIONS} for name in IRREVERSIBLE_TOOLS
 }
 
 ORCHESTRATOR_TOOLS = [
@@ -75,18 +80,31 @@ ORCHESTRATOR_TOOLS = [
 ]
 
 
-def _ensure_workspace() -> None:
-    """Create the workspace tree the prompts assume exists."""
-    (WORKSPACE / "events").mkdir(parents=True, exist_ok=True)
-    (WORKSPACE / "memories").mkdir(parents=True, exist_ok=True)
-
-
 def build_backend() -> CompositeBackend:
-    """Compose the on-disk workspace with per-user persistent memory."""
-    _ensure_workspace()
+    """Compose shared read-only skills with per-user private storage.
+
+    Only `/skills/` lives on the filesystem, and it is shared reference
+    material rather than user data. Both `/events/` and `/memories/` route to
+    per-user store namespaces.
+
+    `/events/` has to be routed rather than left on disk: `backend` takes one
+    static instance (backend factories were removed in deepagents 0.7), so a
+    per-user filesystem root is impossible, and the agent has ls/read/glob/grep
+    over whatever that root is. Event files carry client names, headcounts,
+    guest details, and budgets — leaving them on a shared root lets one
+    planner's session read another's brief.
+
+    No directories are created here. `workspace/memories` used to be made on
+    disk and then permanently shadowed by the `/memories/` route, so it showed
+    up twice in the agent's root listing and anything written to the on-disk
+    copy was unreadable.
+    """
     return CompositeBackend(
         default=FilesystemBackend(root_dir=WORKSPACE, virtual_mode=True),
-        routes={"/memories/": StoreBackend(namespace=memory_namespace)},
+        routes={
+            "/memories/": StoreBackend(namespace=memory_namespace),
+            "/events/": StoreBackend(namespace=events_namespace),
+        },
     )
 
 

@@ -17,7 +17,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from event_planner.agent import WORKSPACE, build_backend
 from event_planner.cli import STATE_DIR, _check_db_outside_workspace
-from event_planner.context import PlannerContext, memory_namespace
+from event_planner.context import PlannerContext, events_namespace, memory_namespace
 
 
 class _Runtime:
@@ -221,3 +221,95 @@ def test_explicit_default_user_is_distinct_from_anonymous():
 
 def test_namespace_survives_a_runtime_without_context():
     assert memory_namespace(object())  # must not raise
+
+
+@pytest.mark.parametrize(
+    "ctx", [PlannerContext(), PlannerContext(**{}), PlannerContext(user_id=None)]
+)
+def test_a_context_without_an_id_is_not_treated_as_an_identified_user(ctx):
+    """The default must not be a truthy placeholder.
+
+    `user_id: str = "default"` silently defeated the whole fail-closed design:
+    every caller that omitted an id took the *identified* branch and shared one
+    bucket. LangGraph builds the dataclass from `context={}`, so this was the
+    common path, not an edge case. The only fallback test passed a runtime with
+    no context at all — a state the production path never reaches.
+    """
+    namespace = memory_namespace(_Runtime(ctx))
+    assert "u" not in namespace, f"unidentified caller landed in a user bucket: {namespace}"
+
+
+def test_unidentified_callers_are_separated_by_thread(monkeypatch):
+    import event_planner.context as ctx_mod
+
+    seen = []
+    for thread in ("thread-a", "thread-b"):
+        monkeypatch.setattr(ctx_mod, "_current_thread_id", lambda t=thread: t)
+        seen.append(memory_namespace(_Runtime(PlannerContext())))
+    assert seen[0] != seen[1], "different threads shared a namespace"
+
+
+# --------------------------------------------------------------------------- #
+# event files must not leak between users
+# --------------------------------------------------------------------------- #
+
+
+def test_event_files_are_scoped_per_user():
+    """Event files carry client names, headcounts, guest details, and budgets.
+
+    They used to live on the single shared FilesystemBackend root, where the
+    agent's ls/read/glob/grep could reach another planner's brief.
+    """
+    a = events_namespace(_Runtime(PlannerContext(user_id="alice@example.com")))
+    b = events_namespace(_Runtime(PlannerContext(user_id="bob@example.com")))
+    assert a != b
+
+
+def test_events_and_memories_do_not_share_a_namespace():
+    who = _Runtime(PlannerContext(user_id="alice@example.com"))
+    assert events_namespace(who) != memory_namespace(who)
+
+
+def test_user_data_paths_are_routed_to_per_user_stores():
+    """`/events/` and `/memories/` must not resolve to the shared filesystem.
+
+    The shared root is a single static path — backend factories were removed in
+    deepagents 0.7 — and the agent has ls/read/glob/grep over it, so anything
+    left there is readable by every session.
+    """
+    from deepagents.backends import StoreBackend
+
+    routes = build_backend().routes
+    for path in ("/events/", "/memories/"):
+        assert path in routes, f"{path} falls through to the shared filesystem"
+        assert isinstance(routes[path], StoreBackend), f"{path} is not store-backed"
+
+
+def test_shared_filesystem_root_holds_only_reference_material():
+    """Whatever sits on disk under the root is visible to every user."""
+    on_disk = {p.name for p in WORKSPACE.iterdir() if not p.name.startswith(".")}
+    assert on_disk <= {"skills"}, f"user data on the shared root: {on_disk - {'skills'}}"
+
+
+def test_root_listing_has_no_duplicate_entries():
+    """`workspace/memories` was created on disk and then permanently shadowed
+    by the /memories/ route, so it appeared twice and anything written to the
+    on-disk copy was unreadable."""
+    paths = [e["path"] for e in (build_backend().ls("/").entries or [])]
+    assert len(paths) == len(set(paths)), f"duplicate entries: {paths}"
+
+
+# --------------------------------------------------------------------------- #
+# gate configuration
+# --------------------------------------------------------------------------- #
+
+
+def test_every_irreversible_tool_is_gated():
+    """Two hand-maintained copies of "which tools spend money" means adding a
+    third booking tool to one and not the other ships it un-gated."""
+    from event_planner.agent import INTERRUPT_ON
+    from event_planner.tools import IRREVERSIBLE_TOOLS
+
+    assert set(INTERRUPT_ON) == set(IRREVERSIBLE_TOOLS)
+    for config in INTERRUPT_ON.values():
+        assert "reject" in config["allowed_decisions"]

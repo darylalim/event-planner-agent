@@ -44,14 +44,24 @@ _SEPARATOR = "-"
 _MAX_READABLE = 40
 _DIGEST_LEN = 12
 
-_ROOT = ("event_planner", "memories")
+#: Root label for every namespace. The kind ("memories"/"events") is appended
+#: by `_scope`, so it must not be baked in here.
+_ROOT = ("event_planner",)
 
 
 @dataclass
 class PlannerContext:
-    """Per-invocation context, passed via `context=` on invoke/stream."""
+    """Per-invocation context, passed via `context=` on invoke/stream.
 
-    user_id: str = "default"
+    `user_id` defaults to None, not to a placeholder string. A truthy default
+    such as "default" silently defeats the fail-closed logic below: every
+    caller that omits an id — `PlannerContext()`, `context={}` (LangGraph
+    constructs the dataclass from an empty mapping), or a client sending
+    partial context — would take the *identified* branch and share one bucket.
+    None makes those callers fall through to thread scope, which is isolated.
+    """
+
+    user_id: str | None = None
 
 
 def _component(raw: str) -> str:
@@ -77,25 +87,51 @@ def _current_thread_id() -> str | None:
     return str(thread_id) if thread_id else None
 
 
-def memory_namespace(runtime: Any) -> tuple[str, ...]:
-    """Namespace factory for `StoreBackend`.
+def _scope(runtime: Any, kind: str) -> tuple[str, ...]:
+    """Build a per-user namespace for one kind of stored data.
 
-    Returns a per-user namespace so one deployed agent can serve many planners
-    without leaking memory between them.
-
-    When no `user_id` is supplied the namespace falls back to the conversation
-    thread rather than a shared bucket. An anonymous caller therefore gets
-    memory isolated to their own thread instead of inheriting everyone else's.
+    Falls back to the conversation thread when no `user_id` is supplied, so an
+    unidentified caller gets storage isolated to their own thread rather than
+    inheriting everyone else's.
     """
     context = getattr(runtime, "context", None)
     user_id = getattr(context, "user_id", None)
     if user_id:
-        return (*_ROOT, "u", _component(str(user_id)))
+        return (*_ROOT, kind, "u", _component(str(user_id)))
 
     thread_id = _current_thread_id()
     if thread_id:
-        return (*_ROOT, "t", _component(thread_id))
+        return (*_ROOT, kind, "t", _component(thread_id))
 
-    # Neither identity nor thread. Nothing durable can be scoped safely, so use
-    # an explicitly-labelled bucket that no identified user can ever occupy.
-    return (*_ROOT, "anonymous")
+    # Neither identity nor thread — nothing durable can be scoped safely. This
+    # bucket is shared, which is why it is labelled: no identified user and no
+    # threaded caller can ever land in it. In practice a checkpointer always
+    # supplies a thread_id, so reaching this means the caller is unroutable.
+    return (*_ROOT, kind, "unscoped")
+
+
+def namespace_for_user(user_id: str, kind: str) -> tuple[str, ...]:
+    """Namespace for a known user id, without needing a LangGraph runtime.
+
+    Callers that already know who they are — CLI inspection, export, tests —
+    would otherwise each hand-roll a stand-in object with a `.context`
+    attribute just to satisfy the runtime-shaped factories below.
+    """
+    return (*_ROOT, kind, "u", _component(user_id))
+
+
+def memory_namespace(runtime: Any) -> tuple[str, ...]:
+    """Namespace for durable client facts (`/memories/`)."""
+    return _scope(runtime, "memories")
+
+
+def events_namespace(runtime: Any) -> tuple[str, ...]:
+    """Namespace for event working files (`/events/`).
+
+    These carry client names, headcounts, guest details, and budgets, so they
+    need the same per-user isolation as memory. They cannot live on the shared
+    `FilesystemBackend` root: that root is a single static path (backend
+    factories were removed in deepagents 0.7), and the agent has ls/read/glob/
+    grep over it, so one planner could read another's brief.
+    """
+    return _scope(runtime, "events")

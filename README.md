@@ -45,8 +45,13 @@ uv run langgraph dev                                  # LangGraph Studio
 uv run pytest                                         # harness tests
 ```
 
-In the CLI, `/state` lists what the agent has memorized about the current user
-and `/exit` quits.
+In the CLI: `/state` lists what is stored for the current user, `/export` writes
+their event files to `exports/`, and `/exit` quits.
+
+Without `--user`, storage scopes to the conversation thread. That is
+deliberate — a shared placeholder id would merge every unidentified operator's
+memory into one bucket. Pass `--user <id>` for storage that carries across
+threads.
 
 ## Architecture
 
@@ -68,38 +73,57 @@ A `CompositeBackend` routes by path prefix, longest match first:
 | Path | Backend | Lifetime |
 | --- | --- | --- |
 | `/memories/` | `StoreBackend`, namespaced per user | Across sessions |
-| everything else | `FilesystemBackend` rooted at `workspace/` | On disk |
+| `/events/` | `StoreBackend`, namespaced per user | Across sessions |
+| `/skills/` | `FilesystemBackend` rooted at `workspace/` | On disk, shared |
 
 The filesystem backend is rooted at `workspace/`, **not** the repo root, and
 runs with `virtual_mode=True` — the agent cannot read or write its own source.
 Don't repoint `root_dir` at the repo, and don't use this backend in a server
 process handling untrusted input.
 
+Event files are store-backed rather than on disk, so they aren't browsable by
+default. `/export` in the CLI writes the current user's files to `exports/`.
+
 ### Tenant isolation
 
-The agent has `ls` / `read_file` / `glob` / `grep` over its filesystem root, so
-anything reachable from that root is readable by every session. Three rules
-follow, each enforced by a test in `tests/test_security.py`:
+The agent has `ls` / `read_file` / `glob` / `grep` over its filesystem root, and
+that root is a **single static path** — backend factories were removed in
+deepagents 0.7, so it cannot vary per user. Anything reachable from it is
+therefore readable by every session. Four rules follow, each enforced by a test
+in `tests/test_security.py`:
 
-**State lives outside the root.** Checkpoints and the memory store go in
-`.state/` at the repo root — a *sibling* of `workspace/`, never inside it. A
-database under the agent's root would let any session read every user's
-memories and every thread's history straight out of the raw file, bypassing
-namespacing completely. `--db` is validated against this too, so an operator
-can't reintroduce it.
+**Only shared reference material sits on the root.** `/skills/` is on disk;
+`/events/` and `/memories/` are routed to per-user store namespaces. Event
+files carry client names, headcounts, guest lists, and budgets, so leaving them
+on the shared root let one planner's session read another's brief.
 
-**Namespace mapping is injective.** Memory is scoped per user via
-`("event_planner", "memories", "u", <component>)`. The store rejects namespace
-components outside `[A-Za-z0-9\-_.@+:~]`, but sanitizing by replacement is
-lossy — `"a/b"` and `"a b"` both collapse to `"a_b"`. A digest of the raw id is
-appended so distinct users never share a namespace, while the readable part
-stays readable (`alice_example.com.9f2a1c…`).
+**State lives outside the root.** Checkpoints and the store go in `.state/` at
+the repo root — a *sibling* of `workspace/`, never inside it. A database under
+the agent's root would let any session read every user's memories and every
+thread's history straight out of the raw file, bypassing namespacing
+completely. `--db` is validated against this too, so an operator can't
+reintroduce it.
 
-**Missing identity does not fail open.** With no `user_id`, memory falls back
-to the conversation thread rather than a shared `default` bucket, so anonymous
-callers get isolated memory instead of inheriting each other's. Anonymous
-namespaces are tagged distinctly from identified ones, so no real user can ever
-occupy one.
+**Namespace mapping is injective.** Storage is scoped per user via
+`("event_planner", <kind>, "u", <component>)`. The store rejects namespace
+components outside `[A-Za-z0-9\-_@+:~]` — note the **period is excluded**,
+because `langgraph.store.base` rejects it even though the `deepagents` regex
+permits it, and only at write time. Sanitizing by replacement is also lossy
+(`"a/b"` and `"a b"` both collapse to `"a_b"`), so a digest of the raw id is
+appended: `alice@example.com` becomes `alice@example_com-ff8d9819fc0e`.
+
+**Missing identity does not fail open.** `PlannerContext.user_id` defaults to
+`None`, never to a placeholder string — a truthy default such as `"default"`
+sends every unidentified caller down the *identified* branch and into one
+shared bucket, which is precisely the failure this rule exists to prevent
+(LangGraph builds the dataclass from `context={}`, so that is the common path).
+With no `user_id`, storage scopes to the conversation thread. `--user` likewise
+defaults to nothing rather than to a placeholder.
+
+The one genuinely shared bucket is `("event_planner", <kind>, "unscoped")`,
+reached only when there is neither an id nor a resolvable thread. A
+checkpointer always supplies a `thread_id`, so reaching it means the caller is
+unroutable; it is labelled so no identified or threaded caller can land there.
 
 ### Skills vs memory
 
@@ -232,11 +256,13 @@ src/event_planner/
   context.py      per-user memory namespacing
   cli.py          interactive REPL with approval prompts
   tools/          catalog (stub) · budget (real) · bookings (stub) · search (live)
-workspace/        the agent's entire filesystem view
+workspace/        the agent's filesystem view — shared, so skills only
   skills/         venue-sourcing · budget-modeling
-  events/         agent working files        (gitignored)
-.state/           checkpoints + memory       (gitignored, outside agent reach)
+.state/           checkpoints, memory, event files   (gitignored, out of reach)
+exports/          /export output                     (gitignored)
 tests/
-  test_harness.py   approval gates, tool binding, config guards
-  test_security.py  tenant isolation — state reachability, namespace collisions
+  test_harness.py      approval gates, tool binding, config guards, step budget
+  test_security.py     tenant isolation — reachability, namespaces, fail-closed
+  test_approval_cli.py the operator's approve/edit/reject prompt
+  test_tools.py        tool correctness — dates, budgets, booking refusals
 ```
