@@ -1,5 +1,7 @@
 # event-planner-agent
 
+[![CI](https://github.com/darylalim/event-planner-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/darylalim/event-planner-agent/actions/workflows/ci.yml)
+
 Event planning agent on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview).
 
 Takes an event brief and drives it to a bookable plan — venue shortlist,
