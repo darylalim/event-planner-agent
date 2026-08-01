@@ -119,10 +119,37 @@ def _collect_decisions(interrupts: Any) -> list[dict[str, Any]]:
     return decisions
 
 
+def _unique_prefix(option: str, allowed: list[str]) -> str:
+    """Shortest prefix of `option` that no other allowed decision shares."""
+    others = [o for o in allowed if o != option]
+    for length in range(1, len(option) + 1):
+        prefix = option[:length]
+        if not any(o.startswith(prefix) for o in others):
+            return prefix
+    return option
+
+
+def _resolve_choice(raw: str, allowed: list[str]) -> str | None:
+    """Resolve typed input to exactly one decision, or None.
+
+    Matching on first letter alone is unsafe: "reject" and "respond" share one,
+    so `r` would silently pick whichever landed last in the map — turning an
+    operator's refusal into a free-text reply the model may read as consent.
+    An ambiguous entry resolves to None and re-prompts; it never guesses.
+    """
+    if not raw:
+        return None
+    if raw in allowed:
+        return raw
+    matches = [option for option in allowed if option.startswith(raw)]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _prompt_one(action: dict[str, Any], allowed: list[str]) -> dict[str, Any]:
     """Read a single decision from the terminal, re-prompting on bad input."""
-    letters = {d[0]: d for d in allowed}
-    hint = " / ".join(f"[{d[0]}]{d[1:]}" for d in allowed)
+    hint = " / ".join(
+        f"[{(p := _unique_prefix(d, allowed))}]{d[len(p):]}" for d in allowed
+    )
 
     while True:
         try:
@@ -131,9 +158,13 @@ def _prompt_one(action: dict[str, Any], allowed: list[str]) -> dict[str, Any]:
             print("\n  no input available — rejecting for safety")
             return {"type": "reject", "message": "No operator available to approve."}
 
-        choice = letters.get(raw[:1]) if raw else None
+        choice = _resolve_choice(raw, allowed)
         if choice is None:
-            print(f"  Enter one of: {', '.join(allowed)}")
+            if raw and any(o.startswith(raw) for o in allowed):
+                candidates = [o for o in allowed if o.startswith(raw)]
+                print(f"  {raw!r} is ambiguous — did you mean {' or '.join(candidates)}?")
+            else:
+                print(f"  Enter one of: {', '.join(allowed)}")
             continue
 
         if choice == "approve":

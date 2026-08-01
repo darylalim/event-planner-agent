@@ -205,6 +205,51 @@ def test_unlisted_tools_are_not_gated(scripted):
     assert [m for m in result["messages"] if getattr(m, "name", None) == "search_venues"]
 
 
+def test_pending_approval_survives_a_process_restart(scripted, tmp_path):
+    """The CLI persists to SQLite, not memory — and operators walk away.
+
+    A booking proposed on Monday should still be approvable on Tuesday, after
+    the process has exited. The other HITL tests use InMemorySaver, so they
+    cannot show that a pending interrupt serializes to disk and resumes from a
+    completely fresh saver, graph, and model.
+    """
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    from langgraph.store.sqlite import SqliteStore
+
+    db = str(tmp_path / "resume.sqlite")
+    config = {"configurable": {"thread_id": "overnight"}}
+
+    # --- session one: the agent proposes a booking, then the process ends ---
+    with SqliteSaver.from_conn_string(db) as cp, SqliteStore.from_conn_string(db) as store:
+        store.setup()
+        graph = build_agent(
+            model=scripted(_hold_call()), checkpointer=cp, store=store
+        )
+        first = graph.invoke(
+            {"messages": [{"role": "user", "content": "Book it."}]},
+            config=config,
+            context=CTX,
+        )
+        assert "__interrupt__" in first, "expected the approval gate to fire"
+
+    # --- session two: brand-new saver, graph, and model. Approve. ---
+    with SqliteSaver.from_conn_string(db) as cp, SqliteStore.from_conn_string(db) as store:
+        graph = build_agent(
+            model=scripted(AIMessage(content="Held.")), checkpointer=cp, store=store
+        )
+        resumed = graph.invoke(
+            Command(resume={"decisions": [{"type": "approve"}]}),
+            config=config,
+            context=CTX,
+        )
+
+    tool_msgs = [
+        m for m in resumed["messages"] if getattr(m, "name", None) == "hold_venue"
+    ]
+    assert tool_msgs, "approval did not survive the restart"
+    assert "Provisional hold placed" in tool_msgs[-1].content
+
+
 # --------------------------------------------------------------------------- #
 # step budget
 # --------------------------------------------------------------------------- #
