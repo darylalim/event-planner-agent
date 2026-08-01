@@ -101,12 +101,35 @@ def test_reject_carries_the_operator_reason(answers):
     answers("r", "Budget not signed off.")
     decision = _prompt_one(ACTION, DEFAULT)
     assert decision["type"] == "reject"
-    assert decision["message"] == "Budget not signed off."
+    assert "Budget not signed off." in decision["message"]
 
 
 def test_reject_without_a_reason_still_explains_itself(answers):
     answers("r", "")
-    assert _prompt_one(ACTION, DEFAULT)["message"] == "Rejected by operator."
+    assert "No reason given." in _prompt_one(ACTION, DEFAULT)["message"]
+
+
+def test_rejection_reads_as_a_human_decision_not_a_tool_failure(answers):
+    """The reason reaches the model as the tool's return value.
+
+    A bare reason gets reported as "the tool returned an error" — observed
+    live. That mislabels a refusal as a malfunction, and the two warrant
+    opposite responses: a failed tool invites a retry, a refusal must not be
+    retried. The message has to say who decided and that nothing happened.
+    """
+    answers("r", "Finance has not signed off.")
+    message = _prompt_one(ACTION, DEFAULT)["message"]
+    lowered = message.lower()
+    assert "operator" in lowered, "does not attribute the decision to a human"
+    assert "not performed" in lowered, "does not state the action did not happen"
+    assert "retried" in lowered, "does not warn against retrying"
+
+
+def test_eof_rejection_is_also_framed_as_a_decision(answers):
+    answers()
+    message = _prompt_one(ACTION, DEFAULT)["message"]
+    assert "operator" in message.lower()
+    assert "not performed" in message.lower()
 
 
 def test_ambiguous_then_specific_reaches_reject(answers):

@@ -119,6 +119,23 @@ def _collect_decisions(interrupts: Any) -> list[dict[str, Any]]:
     return decisions
 
 
+def _decline_message(reason: str) -> str:
+    """Frame a rejection as a human decision, not a tool failure.
+
+    A bare reason reaches the model as the tool's return value, and it reads
+    that as the tool erroring — observed live: "hold_venue returned an error".
+    The distinction is behavioural, not cosmetic: a failed tool invites a
+    retry, whereas a refusal must not be retried. Say who decided and that the
+    action did not happen.
+    """
+    reason = reason.strip() or "No reason given."
+    return (
+        "A human operator reviewed this action and declined it. "
+        "The action was NOT performed and must not be retried unless the "
+        f"operator's concern is resolved first. Operator's reason: {reason}"
+    )
+
+
 def _unique_prefix(option: str, allowed: list[str]) -> str:
     """Shortest prefix of `option` that no other allowed decision shares."""
     others = [o for o in allowed if o != option]
@@ -156,7 +173,12 @@ def _prompt_one(action: dict[str, Any], allowed: list[str]) -> dict[str, Any]:
             raw = input(f"  {hint} > ").strip().lower()
         except EOFError:
             print("\n  no input available — rejecting for safety")
-            return {"type": "reject", "message": "No operator available to approve."}
+            return {
+                "type": "reject",
+                "message": _decline_message(
+                    "No operator was available to review this action."
+                ),
+            }
 
         choice = _resolve_choice(raw, allowed)
         if choice is None:
@@ -172,7 +194,7 @@ def _prompt_one(action: dict[str, Any], allowed: list[str]) -> dict[str, Any]:
 
         if choice == "reject":
             reason = input("  reason (fed back to the agent): ").strip()
-            return {"type": "reject", "message": reason or "Rejected by operator."}
+            return {"type": "reject", "message": _decline_message(reason)}
 
         if choice == "respond":
             return {"type": "respond", "message": input("  response: ").strip()}

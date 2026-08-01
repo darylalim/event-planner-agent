@@ -184,6 +184,27 @@ Behaviours confirmed rather than assumed:
 - **It pushed back.** The brief said "Thursday 19 September 2026"; that date is
   a Saturday, and it flagged the mismatch and checked the real Thursday.
 
+### Approval gate, verified live
+
+All three resume paths were run against `claude-opus-5` on separate threads
+(~$0.25 total). This matters because offline tests cannot reach it: adaptive
+thinking is on by default, so a real `hold_venue` proposal arrives in an
+`AIMessage` carrying thinking blocks *alongside* the `tool_use`, and resuming
+replays that history to the API. A scripted `AIMessage` has no thinking blocks.
+
+Each run confirmed **1 signed thinking block** in the proposing turn, so the
+risky path was genuinely exercised rather than simulated:
+
+| Decision | Result |
+| --- | --- |
+| `edit` | Operator's corrected args executed (60 → 45 guests), not the model's |
+| `approve` | Original args executed |
+| `reject` | Stub never ran; the agent reported the refusal and did not retry |
+
+The `edit` run surfaced a nice property: the agent noticed the executed
+arguments differed from what it proposed and flagged the discrepancy in a
+comparison table rather than silently accepting the change.
+
 ## Notes on `deepagents` 0.7.1
 
 Three places where the published guidance and the installed package disagree.
