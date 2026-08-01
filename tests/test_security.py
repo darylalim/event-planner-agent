@@ -8,8 +8,12 @@ different property: not "does the feature work" but "does the boundary hold".
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 from event_planner.agent import WORKSPACE, build_backend
 from event_planner.cli import STATE_DIR, _check_db_outside_workspace
@@ -19,6 +23,23 @@ from event_planner.context import PlannerContext, memory_namespace
 class _Runtime:
     def __init__(self, ctx):
         self.context = ctx
+
+
+class _ScriptedWriter(GenericFakeChatModel):
+    """Fake model that plays back a fixed reply sequence."""
+
+    replies: list = []
+
+    def __init__(self, replies, **kwargs):
+        super().__init__(messages=iter([]), **kwargs)
+        self.replies = list(replies)
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):  # noqa: ANN001
+        reply = self.replies.pop(0) if self.replies else AIMessage(content="done")
+        return ChatResult(generations=[ChatGeneration(message=reply)])
 
 
 def _ns(user_id):
@@ -92,14 +113,86 @@ def test_ids_that_sanitize_identically_still_do_not_collide(left, right):
     assert _ns(left) != _ns(right), f"{left!r} and {right!r} collided"
 
 
-def test_namespace_components_are_store_safe():
-    """StoreBackend rejects components outside this charset and raises mid-run."""
-    for user_id in ["a b/c*d", "../../etc/passwd", "emoji🎉id", "alice@example.com"]:
-        for component in _ns(user_id):
-            assert component, "empty namespace component"
-            assert all(ch.isalnum() or ch in "-_.@+:~" for ch in component), (
-                f"unsafe component {component!r} from {user_id!r}"
-            )
+_HOSTILE_IDS = [
+    "a b/c*d",
+    "../../etc/passwd",
+    "emoji🎉id",
+    "alice@example.com",  # the period here is the one that bit us
+    "acme-planner",
+    "user.with.dots",
+    "-leading-hyphen-",
+    "x" * 300,
+    "default",
+]
+
+
+@pytest.mark.parametrize("user_id", _HOSTILE_IDS)
+def test_namespaces_satisfy_both_validators(user_id):
+    """Two layers validate namespaces and they disagree.
+
+    `deepagents` permits periods; `langgraph.store.base` rejects them. Checking
+    only the permissive one passes construction, reads, and `ls`, then raises
+    InvalidNamespaceError on the first *write* — which is exactly how this
+    escaped into a live run. Assert against both real validators, not a
+    docstring.
+    """
+    from deepagents.backends.store import _validate_namespace as deepagents_validate
+    from langgraph.store.base import _validate_namespace as langgraph_validate
+
+    namespace = _ns(user_id)
+    deepagents_validate(namespace)  # raises on failure
+    langgraph_validate(namespace)  # raises on failure
+    assert namespace[0] != "langgraph", "reserved root label"
+    assert all(namespace), "empty namespace label"
+
+
+def test_anonymous_and_thread_namespaces_also_validate():
+    from langgraph.store.base import _validate_namespace as langgraph_validate
+
+    langgraph_validate(memory_namespace(_Runtime(None)))
+
+
+def test_memory_write_round_trips_through_a_real_store():
+    """End-to-end proof, not a charset assertion.
+
+    A namespace can satisfy every regex we know about and still be rejected by
+    the store at write time. The only convincing check is writing through the
+    real backend and reading it back.
+    """
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.store.memory import InMemoryStore
+
+    from event_planner.agent import build_agent
+
+    store = InMemoryStore()
+    written = {
+        "name": "write_file",
+        "args": {
+            "file_path": "/memories/AGENTS.md",
+            "content": "Acme prefers venues with step-free access.",
+        },
+        "id": "mem-1",
+    }
+    model = _ScriptedWriter(
+        [
+            AIMessage(content="Saving.", tool_calls=[written]),
+            AIMessage(content="Saved."),
+        ]
+    )
+    graph = build_agent(model=model, checkpointer=InMemorySaver(), store=store)
+
+    result = graph.invoke(
+        {"messages": [{"role": "user", "content": "Remember that."}]},
+        config={"configurable": {"thread_id": "mem-thread"}},
+        context=PlannerContext(user_id="alice@example.com"),
+    )
+
+    tool_msgs = [m for m in result["messages"] if getattr(m, "name", None) == "write_file"]
+    assert tool_msgs, "write_file never ran"
+    assert "error" not in str(tool_msgs[-1].content).lower(), tool_msgs[-1].content
+
+    stored = list(store.search(_ns("alice@example.com")))
+    assert stored, "nothing persisted to the store"
 
 
 # --------------------------------------------------------------------------- #

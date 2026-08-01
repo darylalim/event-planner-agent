@@ -22,10 +22,23 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-#: `StoreBackend` validates every namespace component against this character
-#: set and raises on anything else, so a user id containing a space, slash, or
-#: glob character would blow up mid-run.
-_SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9\-_.@+:~]")
+#: Two layers validate namespace labels and they do NOT agree, so this charset
+#: is the intersection of both:
+#:
+#:   * `deepagents.backends.store` allows ``A-Za-z0-9-_.@+:~``
+#:   * `langgraph.store.base` rejects any label containing a period, plus empty
+#:     labels and a root label of "langgraph"
+#:
+#: The period is therefore excluded even though the deepagents regex permits
+#: it. Trusting the more permissive layer passes construction, reads, and `ls`,
+#: then raises `InvalidNamespaceError` on the first *write* — which is why the
+#: separator below is a hyphen and why `test_namespaces_satisfy_both_validators`
+#: checks both layers rather than one docstring.
+_SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9\-_@+:~]")
+
+#: Separator between the readable prefix and the digest. Must be legal in both
+#: validators above; a period is not.
+_SEPARATOR = "-"
 
 #: Keep the readable prefix short; the digest carries uniqueness.
 _MAX_READABLE = 40
@@ -49,7 +62,7 @@ def _component(raw: str) -> str:
     """
     readable = _SAFE_COMPONENT.sub("_", raw).strip("_")[:_MAX_READABLE]
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:_DIGEST_LEN]
-    return f"{readable}.{digest}" if readable else digest
+    return f"{readable}{_SEPARATOR}{digest}" if readable else digest
 
 
 def _current_thread_id() -> str | None:
