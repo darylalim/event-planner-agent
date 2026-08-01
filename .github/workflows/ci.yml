@@ -1,0 +1,117 @@
+# CI runs the same four gates that fire locally as Claude Code hooks
+# (see .claude/hooks/README.md), so a green run means a contributor without
+# Claude Code cleared the checks that would have blocked the edit on the
+# author's machine:
+#
+#   ruff check      lint_gate.sh
+#   ty check        lint_gate.sh
+#   pytest          test_gate.sh
+#   prompt drift    check_prompt_drift.py
+#
+# The hooks only fire for someone editing through Claude Code. This is what
+# enforces them for everyone else.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Nothing here deploys or publishes, so superseding an in-flight run on the
+# same ref costs nothing.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# No job writes to the repo, comments on a PR, or publishes an artifact.
+permissions:
+  contents: read
+
+env:
+  # Pinned to match .claude/hooks/lint_gate.sh, for the reason recorded there:
+  # an upstream release must not redden CI on code nobody touched. ty is
+  # pre-1.0 and its default diagnostic set still moves. CLAUDE.md documents
+  # the manual commands unpinned on purpose; bump these with the hook's copies.
+  RUFF: ruff@0.16.1
+  TY: ty@0.0.65
+
+jobs:
+  static:
+    name: lint · types · drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # No python-version here: uv reads .python-version (3.14) and provisions
+      # that interpreter itself, which is the documented setup path.
+      - uses: astral-sh/setup-uv@v9
+
+      # --locked fails when uv.lock is stale against pyproject.toml instead of
+      # silently re-resolving. Both checks below need the environment: ty
+      # resolves third-party imports through .venv, and the drift check imports
+      # the agent to read the tool bindings it actually has.
+      - name: Install (locked)
+        id: sync
+        run: uv sync --locked
+
+      # `ruff check`, never `ruff format` — formatting is deliberately
+      # unenforced here and would rewrite files the linter is happy with.
+      - name: Lint (ruff)
+        run: uvx "$RUFF" check .
+
+      # Runs even when ruff is red, mirroring lint_gate.sh, which accumulates
+      # both reports rather than short-circuiting: one red tool hiding the
+      # other costs a whole round trip. Still gated on the install, so a failed
+      # sync surfaces as an install failure rather than as a wall of
+      # unresolved-import findings against source that is fine.
+      - name: Types (ty)
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        run: uvx "$TY" check
+
+      # check_prompt_drift.py is a PostToolUse hook: it reads a Claude Code
+      # payload on stdin and returns 0 for any file outside its TRIGGERS tuple.
+      # A stale path below is therefore a SILENT pass, not a failure — the same
+      # payload with "README.md" exits 0 even against a tree with real drift in
+      # it. The grep is what keeps this step from quietly checking nothing.
+      - name: Prompt/tool drift
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        env:
+          CLAUDE_PROJECT_DIR: ${{ github.workspace }}
+        run: |
+          grep -q '"src/event_planner/prompts.py"' .claude/hooks/check_prompt_drift.py
+          printf '{"tool_input":{"file_path":"src/event_planner/prompts.py"}}' \
+            | uv run python .claude/hooks/check_prompt_drift.py
+
+  test:
+    name: tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One version failing should not hide the state of the other.
+      fail-fast: false
+      matrix:
+        # The two ends of the declared range: 3.11 is the requires-python floor
+        # the project claims to support, 3.14 is the .python-version pin every
+        # checkout develops against. uv.lock carries exactly two resolution
+        # markers (< 3.14 and >= 3.14), so 3.12 and 3.13 install the same
+        # dependency set 3.11 does — the ends are what cover both resolutions.
+        # Add the middle versions here if that ever stops being true.
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+
+      # Sets UV_PYTHON, which takes precedence over .python-version, so the
+      # install and the run below cannot disagree about the interpreter.
+      - uses: astral-sh/setup-uv@v9
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install (locked)
+        run: uv sync --locked
+
+      # No secrets are passed, deliberately. The suite is offline by design —
+      # the model is faked in conftest.py and the tools it exercises are stubs.
+      # If it ever needs ANTHROPIC_API_KEY or TAVILY_API_KEY to go green, that
+      # is the regression, not a CI misconfiguration.
+      - name: Tests
+        run: uv run pytest -q
