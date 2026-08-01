@@ -153,6 +153,37 @@ visible, not blamed on a vendor API. The tool signatures are the contract the
 prompts are written against, so keep them stable when swapping in real
 backends.
 
+## Verified live
+
+One full brief end-to-end against `claude-opus-5` (85 guests, SF, $45k ceiling,
+seated lunch + livestreamed presentation):
+
+| | |
+| --- | --- |
+| Wall clock | 672s |
+| Graph steps | 64 of the 200 budget |
+| Tool calls | `write_todos` ×3, `task` ×2, `estimate_budget` ×7, `write_file` ×3, `read_file` ×4, `ls` ×3 |
+| Tokens | 392,563 in (336,253 cached) / 16,943 out |
+| Cost | ~$0.87 |
+| Files produced | `brief.md`, `venues.md`, `vendors.md`, `budget.md` (~60KB) |
+
+Behaviours confirmed rather than assumed:
+
+- **Skills change behaviour.** For 85 seated guests it searched
+  `min_capacity=180`, applying the venue-sourcing rule that seated format uses
+  ~half of listed capacity — not the 85 in the brief.
+- **Delegation works.** Two subagents ran, each writing its own file and
+  returning a summary rather than dumping contents into the orchestrator.
+- **Budgets get pressure-tested.** Seven `estimate_budget` calls sweeping
+  catering rates and vendor minimums, per the budget-modeling skill.
+- **Memory generalizes.** It recorded "treat streaming as a standing
+  requirement" and "order special covers at headcount+2, counts drift up" —
+  reusable rules, not event trivia.
+- **Cross-session recall and isolation hold.** A brand-new thread for the same
+  user loads that memory; a different user's session does not see it.
+- **It pushed back.** The brief said "Thursday 19 September 2026"; that date is
+  a Saturday, and it flagged the mismatch and checked the real Thursday.
+
 ## Notes on `deepagents` 0.7.1
 
 Three places where the published guidance and the installed package disagree.
