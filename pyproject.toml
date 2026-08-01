@@ -29,14 +29,17 @@ dev = [
     "pytest>=9.1.1",
 ]
 
-# Ruff is deliberately NOT a dependency — run `uvx ruff check .`. Do NOT run
-# `uvx ruff format`: formatting is not enforced here and it rewrites files the
-# linter is happy with. Rationale for the choices below lives in CLAUDE.md;
-# keep it there rather than restating it, so the two cannot drift.
+# Ruff is deliberately NOT a dependency — run `uvx ruff check .` and
+# `uvx ruff format`. Both are enforced by CI (.github/workflows/ci.yml), which
+# runs `format --check`; the tree was formatted in the commit that added that
+# step. Rationale for the choices below lives in CLAUDE.md; keep it there
+# rather than restating it, so the two cannot drift.
 [tool.ruff]
 # Ruff's default is 88, so this is a deliberate loosening, fitted to the code:
-# the longest existing line is 98. Chosen so E501 can be enabled as a live rule
-# instead of being ignored, at the cost of permitting 2 more characters.
+# the longest existing line is 99. Chosen so E501 can be enabled as a live rule
+# instead of being ignored, at the cost of a limit slightly wider than the code
+# actually uses. It also drives the formatter, which joins any wrapped
+# expression that fits within it — which is how that longest line reached 99.
 line-length = 100
 
 [tool.ruff.lint]

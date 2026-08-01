@@ -176,9 +176,7 @@ def main() -> int:
         unknown = sorted(named - bound - benign)
         if unknown:
             rel = skill.relative_to(root)
-            problems.append(
-                f"  {rel}: names {', '.join(unknown)}, which is not a tool anywhere."
-            )
+            problems.append(f"  {rel}: names {', '.join(unknown)}, which is not a tool anywhere.")
 
     missing = sorted(bound - named_anywhere)
     if missing:

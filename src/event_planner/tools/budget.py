@@ -61,9 +61,7 @@ def estimate_budget(
     # reported 20 unneeded covers as $1,280 while the line eight rows below
     # valued each of those same seats at $89.79.
     marginal = (
-        catering_per_person_usd
-        * (1 + service_charge_pct / 100.0)
-        * (1 + contingency_pct / 100.0)
+        catering_per_person_usd * (1 + service_charge_pct / 100.0) * (1 + contingency_pct / 100.0)
     )
 
     # `billed_covers` is a max() against headcount, so this is never negative.

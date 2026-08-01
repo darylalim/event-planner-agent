@@ -42,8 +42,10 @@ Ruff is configured in `pyproject.toml` but is **not** a dependency — run it wi
 enabled; `RUF100` fails the check if one goes stale. `ANN401` is ignored because `Any`
 is honest at the deepagents/langgraph boundary, and `tests/*` ignores `ANN`/`RUF012`
 (the fake models are Pydantic subclasses, so their list defaults are fields, not shared
-state). Formatting is not enforced — `uvx ruff format` would rewrite files the linter
-is happy with.
+state). Formatting **is** enforced — run `uvx ruff format` before committing; CI runs
+`uvx ruff format --check .`. It was adopted after the fact, so the reformat that made
+the tree clean collapsed some hand-wrapped expressions; `line-length` drives the
+formatter as well as E501, so raising it widens what gets joined onto one line.
 
 ty is configured the same way and also not a dependency. Its defaults already pass, so
 only `missing-type-argument` is raised to error — restating the defaults would be config

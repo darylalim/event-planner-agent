@@ -98,7 +98,7 @@ def test_distinct_users_get_distinct_namespaces():
 @pytest.mark.parametrize(
     ("left", "right"),
     [
-        ("a/b", "a b"),          # both sanitize to "a_b"
+        ("a/b", "a b"),  # both sanitize to "a_b"
         ("a*b", "a?b"),
         ("alice/x", "alice x"),
         ("../admin", "..%admin"),

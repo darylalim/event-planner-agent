@@ -66,9 +66,7 @@ def _render_update(chunk: dict[str, Any]) -> None:
             if kind == "ai":
                 text = message.content
                 if isinstance(text, list):  # content blocks
-                    text = "".join(
-                        b.get("text", "") for b in text if isinstance(b, dict)
-                    )
+                    text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
                 if text and text.strip():
                     print(f"\n{text.strip()}\n")
                 for call in getattr(message, "tool_calls", []) or []:
@@ -179,9 +177,7 @@ def _resolve_choice(raw: str, allowed: list[str]) -> str | None:
 
 def _prompt_one(action: dict[str, Any], allowed: list[str]) -> dict[str, Any]:
     """Read a single decision from the terminal, re-prompting on bad input."""
-    hint = " / ".join(
-        f"[{(p := _unique_prefix(d, allowed))}]{d[len(p):]}" for d in allowed
-    )
+    hint = " / ".join(f"[{(p := _unique_prefix(d, allowed))}]{d[len(p) :]}" for d in allowed)
 
     # One guard for every read in this decision, not just the menu. A closed
     # stdin partway through — after choosing "reject" but before typing the
@@ -195,10 +191,7 @@ def _prompt_one(action: dict[str, Any], allowed: list[str]) -> dict[str, Any]:
             if choice is None:
                 if raw and any(o.startswith(raw) for o in allowed):
                     candidates = [o for o in allowed if o.startswith(raw)]
-                    print(
-                        f"  {raw!r} is ambiguous — did you mean "
-                        f"{' or '.join(candidates)}?"
-                    )
+                    print(f"  {raw!r} is ambiguous — did you mean {' or '.join(candidates)}?")
                 else:
                     print(f"  Enter one of: {', '.join(allowed)}")
                 continue
@@ -209,9 +202,7 @@ def _prompt_one(action: dict[str, Any], allowed: list[str]) -> dict[str, Any]:
             if choice == "reject":
                 return {
                     "type": "reject",
-                    "message": _decline_message(
-                        _ask("  reason (fed back to the agent): ")
-                    ),
+                    "message": _decline_message(_ask("  reason (fed back to the agent): ")),
                 }
 
             if choice == "respond":
@@ -248,9 +239,7 @@ def _prompt_one(action: dict[str, Any], allowed: list[str]) -> dict[str, Any]:
         print("\n  no input available — rejecting for safety")
         return {
             "type": "reject",
-            "message": _decline_message(
-                "No operator was available to review this action."
-            ),
+            "message": _decline_message("No operator was available to review this action."),
         }
 
 
@@ -259,15 +248,11 @@ def _prompt_one(action: dict[str, Any], allowed: list[str]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-def _run_turn(
-    graph: Any, payload: Any, config: dict[str, Any], context: PlannerContext
-) -> None:
+def _run_turn(graph: Any, payload: Any, config: dict[str, Any], context: PlannerContext) -> None:
     """Stream one turn, pausing for approval as many times as needed."""
     while True:
         pending: Any = None
-        for chunk in graph.stream(
-            payload, config=config, context=context, stream_mode="updates"
-        ):
+        for chunk in graph.stream(payload, config=config, context=context, stream_mode="updates"):
             if "__interrupt__" in chunk:
                 pending = chunk["__interrupt__"]
                 continue

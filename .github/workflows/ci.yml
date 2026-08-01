@@ -1,15 +1,21 @@
-# CI runs the same four gates that fire locally as Claude Code hooks
-# (see .claude/hooks/README.md), so a green run means a contributor without
-# Claude Code cleared the checks that would have blocked the edit on the
-# author's machine:
+# CI runs the gates that fire locally as Claude Code hooks (see
+# .claude/hooks/README.md), so a green run means a contributor without Claude
+# Code cleared the checks that would have blocked the edit on the author's
+# machine:
 #
 #   ruff check      lint_gate.sh
 #   ty check        lint_gate.sh
 #   pytest          test_gate.sh
 #   prompt drift    check_prompt_drift.py
+#   ruff format     no local counterpart yet — see below
 #
 # The hooks only fire for someone editing through Claude Code. This is what
 # enforces them for everyone else.
+#
+# `ruff format --check` is the one gate with no hook behind it: lint_gate.sh
+# still runs `check` only. It is not edited here because protect_files.sh
+# guards .claude/ against writes from inside a session — add it there directly
+# to get the same feedback locally instead of first on a pull request.
 name: CI
 
 on:
@@ -55,10 +61,15 @@ jobs:
         id: sync
         run: uv sync --locked
 
-      # `ruff check`, never `ruff format` — formatting is deliberately
-      # unenforced here and would rewrite files the linter is happy with.
       - name: Lint (ruff)
         run: uvx "$RUFF" check .
+
+      # --check never writes; it exits non-zero on any file `ruff format` would
+      # change. Gated like ty below so a failed install cannot masquerade as a
+      # formatting failure, and so a red linter does not hide a red formatter.
+      - name: Format (ruff)
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        run: uvx "$RUFF" format --check .
 
       # Runs even when ruff is red, mirroring lint_gate.sh, which accumulates
       # both reports rather than short-circuiting: one red tool hiding the

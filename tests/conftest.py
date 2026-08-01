@@ -34,11 +34,7 @@ class ScriptedModel(GenericFakeChatModel):
         return self
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-        reply = (
-            self.responses.pop(0)
-            if self.responses
-            else AIMessage(content="done")
-        )
+        reply = self.responses.pop(0) if self.responses else AIMessage(content="done")
         return ChatResult(generations=[ChatGeneration(message=reply)])
 
 

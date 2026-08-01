@@ -211,11 +211,7 @@ def search_venues(
         # produced the empty result.
         return (
             f"No venues in {city} match capacity >= {min_capacity}"
-            + (
-                f", day rate <= ${max_day_rate_usd:,.0f}"
-                if max_day_rate_usd is not None
-                else ""
-            )
+            + (f", day rate <= ${max_day_rate_usd:,.0f}" if max_day_rate_usd is not None else "")
             + (f", style '{style}'" if style else "")
             + ". Try relaxing capacity or raising the rate ceiling."
         )
@@ -260,9 +256,7 @@ def check_availability(venue_id: str, event_date: str) -> str:
     # while listing that same date as booked two lines below.
     canonical = parsed.isoformat()
     booked = set(venue["booked_dates"])
-    same_month = sorted(
-        d for d in booked if d.startswith(f"{parsed.year:04d}-{parsed.month:02d}")
-    )
+    same_month = sorted(d for d in booked if d.startswith(f"{parsed.year:04d}-{parsed.month:02d}"))
     if canonical in booked:
         return (
             f"{venue['name']} is NOT available on {canonical}.\n"
@@ -316,8 +310,6 @@ def search_vendors(city: str, category: str, headcount: int | None = None) -> st
             cost_line = (cost_line + " + " if cost_line else "") + f"${v['flat_usd']:,} flat"
 
         lines.append(
-            f"- {v['name']} (id: {v['id']})\n"
-            f"    cost: {cost_line}\n"
-            f"    notes: {v['notes']}"
+            f"- {v['name']} (id: {v['id']})\n    cost: {cost_line}\n    notes: {v['notes']}"
         )
     return "\n".join(lines)

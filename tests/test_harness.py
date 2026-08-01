@@ -149,11 +149,7 @@ def test_rejection_blocks_the_booking_and_returns_feedback(scripted):
     )
     resumed = graph.invoke(
         Command(
-            resume={
-                "decisions": [
-                    {"type": "reject", "message": "Budget not signed off yet."}
-                ]
-            }
+            resume={"decisions": [{"type": "reject", "message": "Budget not signed off yet."}]}
         ),
         config=THREAD,
         context=CTX,
@@ -231,9 +227,7 @@ def test_pending_approval_survives_a_process_restart(scripted, tmp_path):
     # --- session one: the agent proposes a booking, then the process ends ---
     with SqliteSaver.from_conn_string(db) as cp, SqliteStore.from_conn_string(db) as store:
         store.setup()
-        graph = build_agent(
-            model=scripted(_hold_call()), checkpointer=cp, store=store
-        )
+        graph = build_agent(model=scripted(_hold_call()), checkpointer=cp, store=store)
         first = graph.invoke(
             {"messages": [{"role": "user", "content": "Book it."}]},
             config=config,
@@ -252,9 +246,7 @@ def test_pending_approval_survives_a_process_restart(scripted, tmp_path):
             context=CTX,
         )
 
-    tool_msgs = [
-        m for m in resumed["messages"] if getattr(m, "name", None) == "hold_venue"
-    ]
+    tool_msgs = [m for m in resumed["messages"] if getattr(m, "name", None) == "hold_venue"]
     assert tool_msgs, "approval did not survive the restart"
     assert "Provisional hold placed" in tool_msgs[-1].content
 
