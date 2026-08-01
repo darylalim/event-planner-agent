@@ -110,6 +110,16 @@ def _scope(runtime: Any, kind: str) -> tuple[str, ...]:
     return (*_ROOT, kind, "unscoped")
 
 
+def safe_component(raw: str) -> str:
+    """Public form of the namespace component, for callers needing a safe name.
+
+    Reusing this for on-disk export directories keeps them traceable back to
+    the namespace they came from, and means an operator-supplied id can never
+    act as a path segment — `--user ../../etc` becomes an inert string.
+    """
+    return _component(raw)
+
+
 def namespace_for_user(user_id: str, kind: str) -> tuple[str, ...]:
     """Namespace for a known user id, without needing a LangGraph runtime.
 

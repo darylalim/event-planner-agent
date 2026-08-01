@@ -23,7 +23,7 @@ from langgraph.store.sqlite import SqliteStore
 from langgraph.types import Command
 
 from event_planner.agent import DEFAULT_MODEL, PROJECT_ROOT, WORKSPACE, build_agent
-from event_planner.context import PlannerContext, namespace_for_user
+from event_planner.context import PlannerContext, namespace_for_user, safe_component
 
 #: Deliberately a sibling of `workspace/`, never inside it. The agent has
 #: `ls`/`read_file`/`glob`/`grep` over its filesystem root, so a database kept
@@ -364,17 +364,40 @@ def _export(store: SqliteStore, user_id: str | None, destination: Path) -> None:
     if not items:
         print("\n  nothing to export yet.\n")
         return
+
+    # Store keys are the paths the *agent* chose, so they are untrusted input
+    # to this filesystem write. A key of "/events/../../../x" escaped the
+    # export directory entirely — and silently, since the written file then
+    # sat outside the tree this function lists. user_id is likewise never used
+    # as a raw path segment: it goes through the same sanitizer as namespaces.
+    base = (destination / safe_component(user_id)).resolve()
     written = 0
+    skipped = 0
+
     for item in items:
         content = (item.value or {}).get("content")
         if content is None:
             continue
-        target = destination / user_id / item.key.lstrip("/")
+
+        relative = Path(item.key.lstrip("/"))
+        if relative.is_absolute() or any(part == ".." for part in relative.parts):
+            print(f"    skipped {item.key!r} — unsafe path")
+            skipped += 1
+            continue
+
+        target = (base / relative).resolve()
+        if target != base and base not in target.parents:
+            print(f"    skipped {item.key!r} — escapes the export directory")
+            skipped += 1
+            continue
+
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         print(f"    wrote {target}")
         written += 1
-    print(f"\n  exported {written} file(s).\n")
+
+    note = f", skipped {skipped} unsafe path(s)" if skipped else ""
+    print(f"\n  exported {written} file(s){note}.\n")
 
 
 # --------------------------------------------------------------------------- #

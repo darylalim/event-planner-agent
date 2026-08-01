@@ -304,6 +304,82 @@ def test_root_listing_has_no_duplicate_entries():
 # --------------------------------------------------------------------------- #
 
 
+# --------------------------------------------------------------------------- #
+# /export writes agent-chosen paths to disk
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def exporter(tmp_path):
+    """A store plus an export destination, for exercising `_export`."""
+    from langgraph.store.sqlite import SqliteStore
+
+    from event_planner.cli import _export
+    from event_planner.context import namespace_for_user
+
+    db = str(tmp_path / "export.sqlite")
+
+    def _run(user_id: str, entries: dict[str, str]):
+        with SqliteStore.from_conn_string(db) as store:
+            store.setup()
+            namespace = namespace_for_user(user_id, "events")
+            for key, content in entries.items():
+                store.put(namespace, key, {"content": content})
+            _export(store, user_id, tmp_path / "exports")
+        escaped = [
+            p
+            for p in tmp_path.rglob("*")
+            if p.is_file()
+            and p.suffix in {".txt", ".md"}
+            and (tmp_path / "exports") not in p.parents
+        ]
+        exported = [p for p in (tmp_path / "exports").rglob("*") if p.is_file()]
+        return exported, escaped
+
+    return _run
+
+
+def test_export_refuses_traversal_in_an_agent_chosen_path(exporter):
+    """Store keys are paths the *agent* picked, so they are untrusted here.
+
+    A key of "/events/../../../x" escaped the export directory and wrote
+    outside it — silently, since the escaped file then sat outside the tree
+    the function reports on.
+    """
+    exported, escaped = exporter(
+        "alice",
+        {
+            "/events/../../../OUTSIDE.txt": "escaped",
+            "/events/ok/brief.md": "legit",
+        },
+    )
+    assert not escaped, f"wrote outside the export directory: {escaped}"
+    assert [p.name for p in exported] == ["brief.md"]
+
+
+def test_export_of_an_absolute_looking_key_stays_inside(tmp_path, exporter):
+    """A key like "/etc/passwd.txt" must land under the export tree, not at /."""
+    exported, escaped = exporter("alice", {"/etc/passwd.txt": "nope"})
+    assert not escaped
+    base = tmp_path / "exports"
+    assert exported, "file was dropped entirely"
+    for path in exported:
+        assert base in path.parents, f"{path} is outside {base}"
+
+
+def test_export_does_not_use_the_operator_id_as_a_raw_path_segment(exporter):
+    """`--user ../../x` must not relocate the export tree."""
+    exported, escaped = exporter("../../ESCAPED", {"/events/a.md": "x"})
+    assert not escaped, f"--user escaped the export directory: {escaped}"
+    assert exported, "legitimate file was not exported"
+
+
+def test_export_writes_ordinary_files_unchanged(exporter):
+    exported, _ = exporter("alice", {"/events/trip/brief.md": "hello"})
+    assert len(exported) == 1
+    assert exported[0].read_text() == "hello"
+
+
 def test_every_irreversible_tool_is_gated():
     """Two hand-maintained copies of "which tools spend money" means adding a
     third booking tool to one and not the other ships it un-gated."""
