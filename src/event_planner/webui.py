@@ -6,15 +6,19 @@ no Streamlit runtime state. That split exists so the part worth testing — how 
 operator's click becomes a resume payload — stays reachable from the offline test
 suite, like the rest of the harness.
 
-Three things are imported from `cli` rather than restated here:
+Everything both front ends share is imported from `cli` rather than restated,
+because a second copy drifts:
 
-* `_decline_message`, which frames a refusal as a human decision. A bare reason
-  reaches the model as the tool's return value and it reads that as the tool
-  erroring, then retries — observed live. A second copy of that wording would
-  drift from the CLI's, and the drift would surface only as a booking retried
-  after a human already said no.
-* `_check_db_outside_workspace`, the guard that keeps agent state out of the
-  directory the agent itself can read.
+* `_decline_message` frames a refusal as a human decision. A bare reason reaches
+  the model as the tool's return value and it reads that as the tool erroring,
+  then retries — observed live. Divergent wording would surface only as a booking
+  retried after a human already said no.
+* `_check_db_outside_workspace` keeps agent state out of the directory the agent
+  itself can read.
+* `_stored` and `_brief_args` are re-exported below under public names. Both
+  carry load-bearing detail — `_stored` is typed concretely because callers reach
+  `item.key` and `cli._export` treats that key as untrusted input; `_brief_args`
+  owns the truncation arithmetic — and neither should be maintained twice.
 * `DEFAULT_MAX_STEPS`. Both front ends drive the same middleware stack, so they
   need the same super-step budget; a second literal would go stale the next time
   middleware is added.
@@ -29,6 +33,7 @@ UI offers downloads instead, which build no server-side path at all — leaving
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -37,20 +42,33 @@ from pathlib import Path
 from typing import Any
 
 from langgraph.checkpoint.sqlite import SqliteSaver
-from langgraph.store.base import SearchItem
 from langgraph.store.sqlite import SqliteStore
 
 from event_planner.cli import (
     DEFAULT_MAX_STEPS,
+    UnsafeDatabaseLocation,
+    _brief_args,
     _check_db_outside_workspace,
     _decline_message,
+    _stored,
+    credentials_problem,
+    degraded_capability_note,
 )
-from event_planner.context import namespace_for_user
+
+#: Re-exported under public names. These are the CLI's implementations, not
+#: copies of them — see the module docstring.
+brief_args = _brief_args
+stored_items = _stored
 
 __all__ = [
     "DEFAULT_MAX_STEPS",
     "SUPPORTED_DECISIONS",
+    "UnsafeDatabaseLocation",
     "approve_decision",
+    "brief_args",
+    "close_persistence",
+    "credentials_problem",
+    "degraded_capability_note",
     "download_name",
     "edit_decision",
     "message_text",
@@ -105,12 +123,6 @@ def tool_calls_of(message: Any) -> list[dict[str, Any]]:
     return list(getattr(message, "tool_calls", None) or [])
 
 
-def brief_args(args: dict[str, Any], limit: int = 90) -> str:
-    """One-line argument summary for a tool-call caption."""
-    rendered = ", ".join(f"{key}={value!r}" for key, value in args.items())
-    return rendered if len(rendered) <= limit else rendered[: limit - 3] + "..."
-
-
 # --------------------------------------------------------------------------- #
 # human-in-the-loop
 # --------------------------------------------------------------------------- #
@@ -123,6 +135,10 @@ def pending_reviews(interrupts: Any) -> list[tuple[dict[str, Any], list[str]]]:
     `interrupts` field of a `StateSnapshot`; both are sequences of `Interrupt`.
     The middleware requires exactly one decision per action, in order, so the
     caller must preserve this ordering when building the resume payload.
+
+    An unrecognised payload yields `[]`, which is *not* the same as "nothing is
+    pending" — the caller has to compare this against the raw interrupts and
+    refuse rather than fall through to a normal input box.
     """
     if not interrupts:
         return []
@@ -226,8 +242,15 @@ def parse_edited_args(raw: str) -> dict[str, Any]:
 # persistence
 # --------------------------------------------------------------------------- #
 
+#: Both front ends are documented as sharing one database file, so a write lock
+#: held by one is an ordinary event for the other rather than an error. sqlite3's
+#: 5-second default is short for a turn that checkpoints every super-step.
+BUSY_TIMEOUT_SECONDS = 30.0
 
-def open_persistence(db_path: Path) -> tuple[SqliteSaver, SqliteStore]:
+
+def open_persistence(
+    db_path: Path, *, knob: str = "EVENT_PLANNER_DB"
+) -> tuple[SqliteSaver, SqliteStore]:
     """Open the checkpointer and store on connections that outlive one script run.
 
     `from_conn_string` is a context manager that closes the connection on exit,
@@ -245,35 +268,61 @@ def open_persistence(db_path: Path) -> tuple[SqliteSaver, SqliteStore]:
     issues its own `BEGIN`, so leaving Python's implicit transaction handling on
     would nest transactions against a driver that does not support it.
 
+    WAL and a longer busy timeout matter because the CLI and the browser share
+    one file by default: in rollback-journal mode a CLI turn holding the write
+    lock makes a concurrent browser turn fail outright with "database is locked",
+    which the page can only report as a lost turn.
+
+    Args:
+        db_path: Where the database lives.
+        knob: How the calling front end names this setting, used in the error
+            below so the operator is pointed at something they can actually set.
+
     Raises:
-        ValueError: If the database would sit inside the agent's filesystem root,
-            where the agent could read every user's memories out of the raw file.
+        UnsafeDatabaseLocation: If the database would sit inside the agent's
+            filesystem root, where the agent could read every user's memories out
+            of the raw file.
     """
-    _check_db_outside_workspace(db_path)
+    _check_db_outside_workspace(db_path, knob=knob)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    checkpointer = SqliteSaver(
-        sqlite3.connect(str(db_path), check_same_thread=False),
+    checkpointer_conn = sqlite3.connect(
+        str(db_path), check_same_thread=False, timeout=BUSY_TIMEOUT_SECONDS
     )
-    store = SqliteStore(
-        sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None),
+    store_conn = sqlite3.connect(
+        str(db_path),
+        check_same_thread=False,
+        isolation_level=None,
+        timeout=BUSY_TIMEOUT_SECONDS,
     )
+    # Journal mode is a property of the database file, so setting it on either
+    # connection covers both. Done on the autocommit one so it cannot land inside
+    # an implicit transaction.
+    store_conn.execute("pragma journal_mode=WAL")
+
+    checkpointer = SqliteSaver(checkpointer_conn)
+    store = SqliteStore(store_conn)
     store.setup()
     return checkpointer, store
 
 
-def stored_items(
-    store: SqliteStore, user_id: str | None, kind: str
-) -> tuple[tuple[SearchItem, ...], tuple[str, ...]]:
-    """List one kind of stored item for a user, plus the namespace used.
+def close_persistence(checkpointer: Any, store: Any) -> None:
+    """Close both connections `open_persistence` opened.
 
-    Returns nothing for an unidentified caller: with no `user_id` there is no
-    cross-thread namespace to list, and inventing one would defeat the scoping.
+    `st.cache_resource(max_entries=...)` bounds how many entries it keeps but does
+    not close what it evicts, and the page caches on a free-text model field — so
+    without this, every typo leaves a checkpointer and a store connection open for
+    the life of the process.
+
+    Errors are suppressed because this runs from a cache-release callback, where
+    Streamlit treats a raised exception as a user script error: failing to close
+    an already-dead connection must not take the page down with it.
     """
-    if user_id is None:
-        return (), ()
-    namespace = namespace_for_user(user_id, kind)
-    return tuple(store.search(namespace)), namespace
+    for conn in (getattr(checkpointer, "conn", None), getattr(store, "conn", None)):
+        if conn is None:
+            continue
+        with contextlib.suppress(sqlite3.Error):
+            conn.close()
 
 
 #: Anything outside this set is replaced in a download filename. Deliberately

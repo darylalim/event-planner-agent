@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -44,8 +45,12 @@ from event_planner.context import PlannerContext
 from event_planner.webui import (
     DEFAULT_MAX_STEPS,
     SUPPORTED_DECISIONS,
+    UnsafeDatabaseLocation,
     approve_decision,
     brief_args,
+    close_persistence,
+    credentials_problem,
+    degraded_capability_note,
     download_name,
     edit_decision,
     message_text,
@@ -83,26 +88,50 @@ RESUME_PENDING = "__resume_pending_turn__"
 # --------------------------------------------------------------------------- #
 
 
+def _release_resources(value: tuple[Any, Any, Any]) -> None:
+    """Close an evicted entry's SQLite connections.
+
+    `max_entries` bounds how many graphs the cache keeps; it does not close what
+    it drops. Without this, each eviction leaks a checkpointer and a store
+    connection for the life of the process.
+    """
+    _graph, store, checkpointer = value
+    close_persistence(checkpointer, store)
+
+
 # Bounded because `model` is a free-text field: every distinct value builds a
-# graph and opens two SQLite connections, and an unbounded cache keyed on
-# operator input accumulates both for the life of the process.
-@st.cache_resource(show_spinner="Opening the planner…", max_entries=4)
-def _resources(db: str, model: str) -> tuple[Any, Any]:
+# graph and opens two SQLite connections, so an unbounded cache keyed on operator
+# input accumulates both. `on_release` is what actually reclaims them.
+@st.cache_resource(
+    show_spinner="Opening the planner…",
+    max_entries=4,
+    on_release=_release_resources,
+)
+def _resources(db: str, model: str) -> tuple[Any, Any, Any]:
     """Build the graph once and share it across reruns and sessions.
 
     Cached on `(db, model)`: the checkpointer and store are per-database, and the
     graph binds the model at construction. Everything that varies per operator —
     thread id, user id — is passed per call as config and context instead, so it
     must not be part of this key.
+
+    The checkpointer is returned as well even though the page never touches it:
+    `_release_resources` needs its connection, and reaching into `graph` for it
+    would depend on deepagents internals.
     """
     checkpointer, store = open_persistence(Path(db))
     graph = build_agent(model=model, checkpointer=checkpointer, store=store)
-    return graph, store
+    return graph, store, checkpointer
 
 
 # --------------------------------------------------------------------------- #
 # rendering
 # --------------------------------------------------------------------------- #
+
+
+def _content_of(item: Any) -> str:
+    """Materialise one stored item's text, for a download that was clicked."""
+    return (item.value or {}).get("content") or ""
 
 
 def _render_ai(message: Any) -> None:
@@ -201,19 +230,15 @@ with st.sidebar:
 st.title("Event planner")
 st.caption("Deep Agents · bookings and invitations pause for your approval")
 
-if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
-    st.error(
-        "`ANTHROPIC_API_KEY` is not set. Copy `.env.example` to `.env` and fill it in, "
-        "then restart the app.",
-        icon=":material/key_off:",
-    )
+# Same tests the CLI runs, against the same environment — a third required
+# credential added there must not leave this front end starting up and failing
+# opaquely from inside the SDK. Only the rendering differs.
+if (problem := credentials_problem()) is not None:
+    st.error(problem.replace("\n", "\n\n"), icon=":material/key_off:")
     st.stop()
 
-if not os.environ.get("TAVILY_API_KEY", "").strip():
-    st.caption(
-        ":material/info: `TAVILY_API_KEY` is not set — `web_search` degrades to the "
-        "structured directory only."
-    )
+if (note := degraded_capability_note()) is not None:
+    st.caption(f":material/info: {note}")
 
 # The CLI takes `--db`; a Streamlit script has no argv to read, so the same knob
 # is an environment variable. Both default to the same file, so the two front
@@ -221,10 +246,20 @@ if not os.environ.get("TAVILY_API_KEY", "").strip():
 db_path = os.environ.get("EVENT_PLANNER_DB", "").strip() or str(STATE_DIR / "planner.sqlite")
 
 try:
-    graph, store = _resources(db_path, model)
-except ValueError as exc:
-    # `open_persistence` refuses a database inside the agent's filesystem root.
+    graph, store, _checkpointer = _resources(db_path, model)
+except UnsafeDatabaseLocation as exc:
+    # Named specifically: building the agent raises `ValueError` for other
+    # reasons too — an unparseable model id among them — and reporting a model
+    # typo as a storage problem sends the operator to the wrong knob.
     st.error(str(exc), icon=":material/error:")
+    st.stop()
+except Exception as exc:  # noqa: BLE001 - surface it rather than a blank page
+    st.error(
+        f"Could not open the planner — {type(exc).__name__}: {exc}\n\n"
+        "If you just changed **Model**, check the id; the sidebar is still live, "
+        "so correcting it reruns the page.",
+        icon=":material/error:",
+    )
     st.stop()
 
 config: dict[str, Any] = {
@@ -305,9 +340,14 @@ with stored_slot:
                 # validate agent-chosen keys against traversal because it builds
                 # a path from them, and a second copy of that check is a second
                 # thing to get wrong. Nothing here touches the filesystem.
+                #
+                # `data` is a callable so the file's text is materialised only
+                # when the button is clicked. Passing the string would load every
+                # artifact on every rerun — and a venue comparison ran to 15.7 KB
+                # in the recorded live run.
                 st.download_button(
                     item.key,
-                    data=(item.value or {}).get("content") or "",
+                    data=partial(_content_of, item),
                     file_name=download_name(item.key),
                     mime="text/markdown",
                     key=f"dl-{kind}-{item.key}",

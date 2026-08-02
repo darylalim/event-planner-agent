@@ -278,39 +278,74 @@ def _load_env() -> None:
         load_dotenv()  # fall back to the default search
 
 
+def credentials_problem() -> str | None:
+    """Message describing a missing *required* credential, or None.
+
+    Split from its rendering so both front ends apply the same test against the
+    same environment. A third required credential added here must not leave one
+    of them starting up and failing opaquely from inside the SDK — the failure
+    `_load_env` exists to prevent.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        return None
+    return (
+        f"ANTHROPIC_API_KEY is not set.\n"
+        f"  Copy .env.example to .env and fill it in:\n"
+        f"    cp {PROJECT_ROOT / '.env.example'} {PROJECT_ROOT / '.env'}"
+    )
+
+
+def degraded_capability_note() -> str | None:
+    """Message about an optional credential whose absence changes behaviour."""
+    if os.environ.get("TAVILY_API_KEY", "").strip():
+        return None
+    return "TAVILY_API_KEY not set — web_search will degrade to the structured directory only."
+
+
 def _check_credentials() -> str | None:
     """Return an actionable message when required credentials are missing."""
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
-        return (
-            f"ANTHROPIC_API_KEY is not set.\n"
-            f"  Copy .env.example to .env and fill it in:\n"
-            f"    cp {PROJECT_ROOT / '.env.example'} {PROJECT_ROOT / '.env'}"
-        )
-    if not os.environ.get("TAVILY_API_KEY", "").strip():
-        print(
-            "  note: TAVILY_API_KEY not set — web_search will degrade to the "
-            "structured directory only.\n",
-            file=sys.stderr,
-        )
+    if (problem := credentials_problem()) is not None:
+        return problem
+    if (note := degraded_capability_note()) is not None:
+        print(f"  note: {note}\n", file=sys.stderr)
     return None
 
 
-def _check_db_outside_workspace(db_path: Path) -> None:
+class UnsafeDatabaseLocation(ValueError):
+    """The database would sit inside the directory the agent itself can read.
+
+    A `ValueError` subclass so callers that catch `ValueError` keep working, but
+    nameable on its own: the web UI has to tell this apart from the other
+    `ValueError`s that building the agent can raise — an unparseable model id
+    among them — so it does not report a model typo as a storage problem.
+    """
+
+
+def _check_db_outside_workspace(db_path: Path, knob: str = "--db") -> None:
     """Refuse to put agent state where the agent can read it.
 
+    Args:
+        db_path: Where the database would live.
+        knob: How the *calling front end* names this setting, so the message
+            points at something the operator actually set. The CLI has `--db`;
+            the browser UI has the `EVENT_PLANNER_DB` environment variable, and
+            being told to fix a flag that front end has no way to pass is a
+            dead end.
+
     Raises:
-        ValueError: If the database would sit inside the agent's filesystem root.
+        UnsafeDatabaseLocation: If the database would sit inside the agent's
+            filesystem root.
     """
     resolved = db_path.resolve()
     root = WORKSPACE.resolve()
     if resolved == root or root in resolved.parents:
         msg = (
-            f"--db {resolved} is inside the agent's filesystem root ({root}).\n"
+            f"{knob} {resolved} is inside the agent's filesystem root ({root}).\n"
             "The agent can read that directory, so it could read every user's "
             "memories and every thread's checkpoints out of the raw database. "
             "Choose a path outside the workspace."
         )
-        raise ValueError(msg)
+        raise UnsafeDatabaseLocation(msg)
 
 
 def _stored(

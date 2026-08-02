@@ -16,7 +16,7 @@ what you need to *change code* safely.
 uv sync                                    # install (uv required; .python-version pins 3.14)
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 163 tests, ~4s, fully offline
+uv run pytest                              # 176 tests, ~4s, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -129,14 +129,28 @@ as a tool error and retry. `webui.SUPPORTED_DECISIONS` holds the same three and 
 anything else as unsupported rather than rendering it.
 
 **Two front ends can now refuse a booking, and they must do it identically.**
-`webui.py` imports `_decline_message`, `_check_db_outside_workspace`, and
-`DEFAULT_MAX_STEPS` from `cli.py` rather than restating them — the wording of a refusal
-is behavioural, not cosmetic, and a divergent copy would surface only as a booking
-retried after a human said no. `test_reject_matches_the_cli_byte_for_byte` and
-`test_edit_matches_the_cli` drive `cli._prompt_one` with scripted stdin and compare its
-payload against the web builder's. What the web UI deliberately does *not* mirror is
-`cli._export`: it offers downloads, which construct no server-side path, so the traversal
-check that makes `_export` safe has exactly one copy.
+`webui.py` imports everything shared from `cli.py` rather than restating it —
+`_decline_message`, `_check_db_outside_workspace`, `credentials_problem`,
+`DEFAULT_MAX_STEPS`, and `_stored`/`_brief_args` (re-exported as `stored_items`/`brief_args`,
+so they are the CLI's objects, not equivalents — `test_the_shared_helpers_are_the_clis_own_objects`
+asserts identity). The wording of a refusal is behavioural, not cosmetic, and a divergent
+copy would surface only as a booking retried after a human said no;
+`test_reject_matches_the_cli_byte_for_byte` and `test_edit_matches_the_cli` drive
+`cli._prompt_one` with scripted stdin and compare its payload against the web builder's.
+Messages that name an operator-facing knob take it as a parameter
+(`_check_db_outside_workspace(..., knob=...)`), since `--db` is meaningless to someone who
+set `EVENT_PLANNER_DB`.
+
+What the web UI deliberately does *not* mirror is `cli._export`: it offers downloads, which
+construct no server-side path, so the traversal check that makes `_export` safe has exactly
+one copy.
+
+**The two front ends share one database file, so its connections need WAL.** `open_persistence`
+sets `journal_mode=WAL` and a 30s busy timeout; in rollback-journal mode a CLI turn holding the
+write lock makes a concurrent browser turn fail outright with "database is locked", which the
+page can only report as a lost turn. Connections are also closed on cache eviction via
+`close_persistence` — `st.cache_resource(max_entries=...)` bounds how many entries it keeps but
+does not close what it drops, and the cache key includes a free-text model field.
 
 **A disabled Streamlit button is not a guard.** `disabled=` stops a click in the browser
 and says nothing about what reaches the branch behind it. The approval submit button

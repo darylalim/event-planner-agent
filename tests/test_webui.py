@@ -391,6 +391,126 @@ def test_stored_items_reads_back_what_the_agent_wrote(tmp_path):
     assert [item.key for item in items] == ["/events/offsite/brief.md"]
 
 
+# --------------------------------------------------------------------------- #
+# shared with the CLI rather than copied
+# --------------------------------------------------------------------------- #
+
+
+def test_the_shared_helpers_are_the_clis_own_objects():
+    """Not equivalent implementations — the same ones, so they cannot drift.
+
+    `cli._stored`'s concrete typing is load-bearing (callers reach `item.key`,
+    and `cli._export` treats that key as untrusted input), and `_brief_args`
+    owns the truncation arithmetic.
+    """
+    from event_planner import cli
+    from event_planner.webui import brief_args
+
+    assert stored_items is cli._stored
+    assert brief_args is cli._brief_args
+
+
+def test_both_front_ends_apply_the_same_credential_test(monkeypatch):
+    from event_planner.cli import _check_credentials
+    from event_planner.webui import credentials_problem
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert _check_credentials() == credentials_problem()
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_a_blank_required_credential_counts_as_missing(monkeypatch, value):
+    from event_planner.webui import credentials_problem
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", value)
+    assert "ANTHROPIC_API_KEY" in (credentials_problem() or "")
+
+
+def test_a_present_required_credential_reports_nothing(monkeypatch):
+    from event_planner.webui import credentials_problem
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
+    assert credentials_problem() is None
+
+
+def test_the_optional_credential_note_appears_only_when_it_is_missing(monkeypatch):
+    from event_planner.webui import degraded_capability_note
+
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    assert "TAVILY_API_KEY" in (degraded_capability_note() or "")
+
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-not-a-real-key")
+    assert degraded_capability_note() is None
+
+
+# --------------------------------------------------------------------------- #
+# the error message names the knob the operator actually set
+# --------------------------------------------------------------------------- #
+
+
+def test_the_web_path_names_its_environment_variable():
+    """Telling a browser operator to fix `--db` points at a flag they cannot pass."""
+    from event_planner.agent import WORKSPACE
+    from event_planner.webui import UnsafeDatabaseLocation
+
+    with pytest.raises(UnsafeDatabaseLocation, match="EVENT_PLANNER_DB"):
+        open_persistence(WORKSPACE / "planner.sqlite")
+
+
+def test_the_cli_path_still_names_its_own_flag():
+    from event_planner.agent import WORKSPACE
+    from event_planner.cli import _check_db_outside_workspace
+
+    with pytest.raises(ValueError, match=r"\-\-db"):
+        _check_db_outside_workspace(WORKSPACE / "planner.sqlite")
+
+
+def test_the_unsafe_location_error_is_still_a_value_error():
+    """Existing callers catch `ValueError`; the subclass only adds a name."""
+    from event_planner.webui import UnsafeDatabaseLocation
+
+    assert issubclass(UnsafeDatabaseLocation, ValueError)
+
+
+# --------------------------------------------------------------------------- #
+# connections are shared with the CLI, and reclaimed
+# --------------------------------------------------------------------------- #
+
+
+def test_persistence_uses_wal_so_the_front_ends_do_not_lock_each_other(tmp_path):
+    """Both are documented as sharing one file; rollback-journal mode blocks."""
+    _, store = open_persistence(tmp_path / "planner.sqlite")
+    mode = store.conn.execute("pragma journal_mode").fetchone()[0]
+    assert mode.lower() == "wal"
+
+
+def test_closing_persistence_closes_both_connections(tmp_path):
+    """`st.cache_resource` evicts entries but does not close what it drops."""
+    from event_planner.webui import close_persistence
+
+    checkpointer, store = open_persistence(tmp_path / "planner.sqlite")
+    close_persistence(checkpointer, store)
+
+    for conn in (checkpointer.conn, store.conn):
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("select 1")
+
+
+def test_closing_persistence_twice_does_not_raise(tmp_path):
+    """It runs from a cache-release callback, where a raise is a page error."""
+    from event_planner.webui import close_persistence
+
+    checkpointer, store = open_persistence(tmp_path / "planner.sqlite")
+    close_persistence(checkpointer, store)
+    close_persistence(checkpointer, store)
+
+
+def test_closing_persistence_tolerates_objects_without_connections():
+    from event_planner.webui import close_persistence
+
+    close_persistence(None, None)
+
+
 def test_the_database_is_a_real_file_on_disk(tmp_path):
     """Memory that vanishes with the process is not cross-session memory."""
     db = tmp_path / "planner.sqlite"
