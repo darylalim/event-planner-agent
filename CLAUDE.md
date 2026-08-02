@@ -16,7 +16,7 @@ what you need to *change code* safely.
 uv sync                                    # install (uv required; .python-version pins 3.14)
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 152 tests, ~3s, fully offline
+uv run pytest                              # 163 tests, ~4s, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -143,6 +143,24 @@ and says nothing about what reaches the branch behind it. The approval submit bu
 checks `ready` again in the handler; the first version did not, and
 `test_submitting_with_no_decision_sends_nothing` caught it resuming the graph with an
 empty decision list.
+
+**Approval widget keys follow the action, never its position.** Streamlit restores a
+keyed widget's value whenever a widget with that key renders again. With `key=f"choice-{index}"`,
+resolving one approval and immediately interrupting for a *different* action reused the key,
+so the new panel rendered pre-approved with submit enabled — one click executing something
+nobody reviewed. `edit` was worse: a stored value beats the `value=` argument, so the new
+action's box came back holding the previous action's arguments and would have executed the
+wrong tool with them. `webui.review_token` mixes in the checkpoint id (fresh per interrupt,
+stable across the reruns *within* one approval, which is what lets a selection survive long
+enough to submit) plus the action name and args.
+`test_a_second_interrupt_is_not_pre_approved` guards it.
+
+**An interrupt payload the page cannot parse must fail closed.** `pending_reviews` returns
+`[]` for an unrecognised shape, and an empty result rendered the ordinary chat input — so a
+follow-up would run against a thread holding a `tool_use` with no `tool_result` while a
+booking sat un-gated behind a UI that looked idle. The page compares `snapshot.interrupts`
+against the parsed reviews and refuses loudly when they disagree, matching
+`cli._collect_decisions`, which raises rather than continuing.
 
 **A turn can stop with `next` set and no interrupt.** That is not an approval waiting to
 be answered — it is an unfinished tool call, and LangGraph continues it by streaming

@@ -29,6 +29,7 @@ UI offers downloads instead, which build no server-side path at all — leaving
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -57,6 +58,7 @@ __all__ = [
     "parse_edited_args",
     "pending_reviews",
     "reject_decision",
+    "review_token",
     "stored_items",
     "tool_calls_of",
     "unsupported_decisions",
@@ -142,6 +144,38 @@ def pending_reviews(interrupts: Any) -> list[tuple[dict[str, Any], list[str]]]:
         )
         reviews.append((action, list(allowed)))
     return reviews
+
+
+def review_token(snapshot_config: Any, index: int, action: dict[str, Any]) -> str:
+    """Identity for one pending action's widgets, for use in Streamlit `key=`.
+
+    Positional keys (`choice-0`) are wrong here, and dangerously so. Streamlit
+    restores a keyed widget's value whenever a widget with that key renders
+    again, so when one approval resolves and the graph immediately interrupts
+    for a *different* action, the new panel inherits the previous decision — it
+    renders pre-approved with the submit button already enabled, and one
+    reflexive click executes an action nobody reviewed. The edit box is worse:
+    a stored value beats the `value=` argument, so the new action's arguments
+    are silently replaced by the previous action's.
+
+    The checkpoint id changes with every super-step, so it distinguishes one
+    interrupt from the next while staying stable across the reruns that happen
+    *within* one pending approval — which is what lets a selection survive long
+    enough to be submitted. The action name and arguments are mixed in so the
+    key still differs per action when no checkpoint id is available.
+    """
+    if not isinstance(snapshot_config, dict):
+        snapshot_config = {}
+    checkpoint = (snapshot_config.get("configurable") or {}).get("checkpoint_id") or ""
+    raw = "|".join(
+        [
+            str(checkpoint),
+            str(index),
+            str(action.get("name", "")),
+            json.dumps(action.get("args", {}), sort_keys=True, default=str),
+        ]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def unsupported_decisions(allowed: list[str]) -> list[str]:

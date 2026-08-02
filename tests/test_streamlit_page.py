@@ -44,11 +44,16 @@ def _interrupt(allowed=("approve", "edit", "reject"), actions=(HOLD,)):
 class FakeGraph:
     """Stands in for the compiled graph: records what a decision resumes with."""
 
-    def __init__(self, interrupt=None, messages=(), next_nodes=()):
+    def __init__(self, interrupt=None, messages=(), next_nodes=(), then=None):
         self.sent = []
         self.interrupt = interrupt
         self.messages = list(messages)
         self.next_nodes = tuple(next_nodes)
+        # Interrupt raised by the *next* run, so a test can model the real
+        # sequence: approve `hold_venue`, and the agent immediately asks about
+        # `send_invitations` in the same script run.
+        self.then = then
+        self.checkpoint = 0
 
     def get_state(self, config):
         interrupts = (SimpleNamespace(value=self.interrupt),) if self.interrupt else ()
@@ -56,14 +61,19 @@ class FakeGraph:
             values={"messages": self.messages},
             interrupts=interrupts,
             next=self.next_nodes,
+            # A real snapshot carries the checkpoint id, which advances every
+            # super-step. Widget identity depends on it.
+            config={"configurable": {"thread_id": "t", "checkpoint_id": f"ck-{self.checkpoint}"}},
         )
 
     def stream(self, payload, config=None, context=None, stream_mode=None):
         self.sent.append(payload)
-        # Running clears both the pending approval and the pending node, like the
-        # real graph.
-        self.interrupt = None
-        self.next_nodes = ()
+        self.checkpoint += 1
+        # Running clears the pending approval and the pending node, like the real
+        # graph — and may immediately raise the next interrupt.
+        self.interrupt = self.then
+        self.then = None
+        self.next_nodes = ("tools",) if self.interrupt else ()
         return iter([])
 
     @property
@@ -75,8 +85,8 @@ class FakeGraph:
 def page(tmp_path, monkeypatch):
     """Run the real page against a fake graph and return `(AppTest, FakeGraph)`."""
 
-    def _run(interrupt=None, messages=(), api_key=True, next_nodes=()):
-        fake = FakeGraph(interrupt, messages, next_nodes)
+    def _run(interrupt=None, messages=(), api_key=True, next_nodes=(), then=None):
+        fake = FakeGraph(interrupt, messages, next_nodes, then)
         monkeypatch.setattr("event_planner.agent.build_agent", lambda **_kwargs: fake)
         monkeypatch.setenv("EVENT_PLANNER_DB", str(tmp_path / "planner.sqlite"))
 
@@ -229,6 +239,79 @@ def test_malformed_edited_arguments_block_the_submission(page):
 
     at.button[0].click().run()
     assert fake.sent == []
+
+
+# --------------------------------------------------------------------------- #
+# one approval must not contaminate the next
+# --------------------------------------------------------------------------- #
+
+SEND = {"name": "send_invitations", "args": {"recipient_count": 250, "event_name": "Offsite"}}
+
+
+def test_a_second_interrupt_is_not_pre_approved(page):
+    """Positional widget keys made the next action inherit the last decision.
+
+    Approving `hold_venue` resumes the graph, which immediately interrupts for
+    `send_invitations` in the same run. With `key=f"choice-{index}"` Streamlit
+    restored the stored value, so that panel came back with `approve` selected
+    and Submit enabled — one reflexive click emailing 250 guests with no decision
+    ever made for that action.
+    """
+    at, fake = page(_interrupt(), then=_interrupt(actions=(SEND,)))
+    at.segmented_control[0].set_value("approve").run()
+    at.button[0].click().run()
+
+    assert fake.decisions == [[{"type": "approve"}]]
+    assert any("send_invitations" in s.value for s in at.subheader)
+
+    assert at.segmented_control[0].value is None
+    assert at.button[0].disabled
+
+
+def test_a_second_interrupt_gets_its_own_widget_identity(page):
+    """Worse than the above: a stored widget value beats the `value=` argument.
+
+    With positional keys the new action inherited `edit` *and* the previous
+    action's arguments — the box parsed cleanly, so Submit was enabled and would
+    have executed `send_invitations` with `hold_venue`'s arguments. Distinct
+    widget identity is what makes that impossible, so that is what is asserted.
+
+    Not asserted via the text area: after the page's internal `st.rerun()`,
+    AppTest's element tree still lists the *previous* panel's text area even
+    though Streamlit has dropped it from session state (reading its `.value`
+    raises `KeyError`). It is a ghost in the harness, not a live widget.
+    """
+    at, _ = page(_interrupt(), then=_interrupt(actions=(SEND,)))
+    first_key = at.segmented_control[0].key
+
+    at.segmented_control[0].set_value("edit").run()
+    at.text_area[0].set_value('{"venue_id": "v-loft-mission", "headcount": 45}').run()
+    at.button[0].click().run()
+
+    assert any("send_invitations" in s.value for s in at.subheader)
+    assert at.segmented_control[0].key != first_key
+    assert at.button[0].disabled
+
+
+def test_an_unreadable_interrupt_fails_closed(page):
+    """A payload shape this page cannot parse must not look like "nothing pending".
+
+    Showing the chat input here would run a follow-up against a thread holding a
+    `tool_use` with no `tool_result`, with a booking un-gated in the meantime.
+    """
+    at, fake = page(interrupt="a shape this page does not understand")
+
+    assert any("could not be read" in err.value for err in at.error)
+    assert len(at.chat_input) == 0
+    assert _resume_buttons(at) == []
+    assert fake.sent == []
+
+
+def test_the_disabled_submit_button_explains_itself(page):
+    """The old `not ready and not blocked` spelling was unsatisfiable."""
+    at, _ = page(_interrupt())
+    assert at.button[0].disabled
+    assert any("Choose a decision" in c.value for c in at.caption)
 
 
 # --------------------------------------------------------------------------- #

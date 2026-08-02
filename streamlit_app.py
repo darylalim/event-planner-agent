@@ -4,6 +4,11 @@ Run with `uv run streamlit run streamlit_app.py`. The CLI (`uv run event-planner
 remains the reference implementation; this is the same graph, the same
 persistence, and the same approval gates behind a browser UI.
 
+There is no authentication. "User id" is a free-text field, so anyone who can
+reach the port can name any tenant and read that tenant's stored files — bind it
+to localhost (`--server.address 127.0.0.1`) and do not put it on a shared network
+without an auth layer in front.
+
 The turn loop is inverted relative to `cli._run_turn`. That loop blocks on
 `input()` until the operator decides; a Streamlit script cannot block, because it
 runs top to bottom and ends, then reruns on the next interaction. So the loop
@@ -38,6 +43,7 @@ from event_planner.cli import STATE_DIR, _load_env
 from event_planner.context import PlannerContext
 from event_planner.webui import (
     DEFAULT_MAX_STEPS,
+    SUPPORTED_DECISIONS,
     approve_decision,
     brief_args,
     download_name,
@@ -47,6 +53,7 @@ from event_planner.webui import (
     parse_edited_args,
     pending_reviews,
     reject_decision,
+    review_token,
     stored_items,
     tool_calls_of,
     unsupported_decisions,
@@ -177,7 +184,8 @@ with st.sidebar:
         help=(
             "Scopes memory and event files. Leave it blank and storage scopes to "
             "the thread instead — deliberately, since a shared placeholder id "
-            "would merge every unidentified operator into one bucket."
+            "would merge every unidentified operator into one bucket. This field "
+            "is not authenticated: it names a tenant, it does not prove one."
         ),
     )
     model = st.text_input("Model", value=DEFAULT_MODEL, key="model")
@@ -227,41 +235,10 @@ config: dict[str, Any] = {
 }
 context = PlannerContext(user_id=user_id)
 
-
-# --------------------------------------------------------------------------- #
-# sidebar — stored artifacts (needs the store, so it comes after the build)
-# --------------------------------------------------------------------------- #
-
-with st.sidebar:
-    st.subheader("Stored", divider="gray")
-
-    if user_id is None:
-        st.caption(
-            "No user id, so storage is scoped to this thread. Set one for memory "
-            "and event files that carry across threads."
-        )
-    else:
-        for kind, icon in (("memories", ":material/psychology:"), ("events", ":material/folder:")):
-            items, namespace = stored_items(store, user_id, kind)
-            if not items:
-                st.caption(f"{icon} no {kind} yet")
-                continue
-            st.caption(f"{icon} {kind}")
-            for item in items:
-                content = (item.value or {}).get("content") or ""
-                # Downloads rather than a server-side write: `cli._export` has to
-                # validate agent-chosen keys against traversal because it builds
-                # a path from them, and a second copy of that check is a second
-                # thing to get wrong. Nothing here touches the filesystem.
-                st.download_button(
-                    item.key,
-                    data=content,
-                    file_name=download_name(item.key),
-                    mime="text/markdown",
-                    key=f"dl-{kind}-{item.key}",
-                    icon=":material/download:",
-                )
-            st.caption(f"`{'/'.join(namespace)}`")
+# Claimed now, filled after the turn runs. Listing the store here directly would
+# show the *pre-turn* contents, so the files a run just produced would not appear
+# until some unrelated interaction triggered another rerun.
+stored_slot = st.sidebar.container()
 
 
 # --------------------------------------------------------------------------- #
@@ -305,17 +282,74 @@ if payload is not None:
 
 
 # --------------------------------------------------------------------------- #
+# stored artifacts — filled after the turn, so a run's own output is listed
+# --------------------------------------------------------------------------- #
+
+with stored_slot:
+    st.subheader("Stored", divider="gray")
+
+    if user_id is None:
+        st.caption(
+            "No user id, so storage is scoped to this thread. Set one for memory "
+            "and event files that carry across threads."
+        )
+    else:
+        for kind, icon in (("memories", ":material/psychology:"), ("events", ":material/folder:")):
+            items, namespace = stored_items(store, user_id, kind)
+            if not items:
+                st.caption(f"{icon} no {kind} yet")
+                continue
+            st.caption(f"{icon} {kind}")
+            for item in items:
+                # Downloads rather than a server-side write: `cli._export` has to
+                # validate agent-chosen keys against traversal because it builds
+                # a path from them, and a second copy of that check is a second
+                # thing to get wrong. Nothing here touches the filesystem.
+                st.download_button(
+                    item.key,
+                    data=(item.value or {}).get("content") or "",
+                    file_name=download_name(item.key),
+                    mime="text/markdown",
+                    key=f"dl-{kind}-{item.key}",
+                    icon=":material/download:",
+                )
+            st.caption(f"`{'/'.join(namespace)}`")
+
+
+# --------------------------------------------------------------------------- #
 # approval gate, or the input box — never both
 # --------------------------------------------------------------------------- #
 
-reviews = pending_reviews(getattr(snapshot, "interrupts", None))
+raw_interrupts = getattr(snapshot, "interrupts", None)
+reviews = pending_reviews(raw_interrupts)
 
-if reviews:
+if raw_interrupts and not reviews:
+    # Fail closed. The graph is holding an unanswered tool call, so rendering the
+    # normal chat input would let a follow-up run against a thread with a
+    # `tool_use` and no `tool_result` — the model call fails, and in the meantime
+    # a pending booking sits un-gated behind a UI that looks idle.
+    # `cli._collect_decisions` raises on an unreadable payload rather than
+    # continuing; the browser has to refuse just as loudly.
+    st.error(
+        "This thread is interrupted, but the pending action could not be read — "
+        "the interrupt payload is not in a shape this page understands. **Nothing "
+        "has been approved.** Resolve it with the CLI (`uv run event-planner`).",
+        icon=":material/report:",
+    )
+
+elif reviews:
     st.divider()
     decisions: list[dict[str, Any]] = []
     blocked = False
 
     for index, (action, allowed) in enumerate(reviews):
+        # Widget identity has to follow the *action*, not its position. Streamlit
+        # restores a keyed widget's value whenever that key renders again, so
+        # positional keys let a resolved approval's selection carry into the next
+        # interrupt — the new action rendering pre-approved with submit enabled,
+        # and for `edit`, prefilled with the previous action's arguments.
+        token = review_token(getattr(snapshot, "config", None), index, action)
+
         with st.container(border=True):
             st.subheader(f":material/gavel: Approval required — `{action['name']}`")
             st.caption("This action is irreversible from the client's point of view.")
@@ -334,7 +368,10 @@ if reviews:
                     icon=":material/info:",
                 )
 
-            offered = [d for d in ("approve", "edit", "reject") if d in allowed]
+            # From the one list, not a second literal — `SUPPORTED_DECISIONS` is
+            # what `unsupported_decisions` measures against, so a copy here could
+            # silently omit a decision while that warning stayed satisfied.
+            offered = [d for d in SUPPORTED_DECISIONS if d in allowed]
             if not offered:
                 st.error("No decision this UI can construct is allowed.", icon=":material/block:")
                 blocked = True
@@ -346,7 +383,7 @@ if reviews:
             choice = st.segmented_control(
                 "Decision",
                 offered,
-                key=f"choice-{index}",
+                key=f"choice-{token}",
                 format_func=str.capitalize,
             )
 
@@ -355,7 +392,7 @@ if reviews:
             elif choice == "reject":
                 reason = st.text_area(
                     "Reason (fed back to the agent)",
-                    key=f"reason-{index}",
+                    key=f"reason-{token}",
                     placeholder="Why this is not going ahead.",
                 )
                 decisions.append(reject_decision(reason))
@@ -364,7 +401,7 @@ if reviews:
                     "Arguments to execute instead",
                     value=json.dumps(action.get("args", {}), indent=2),
                     height=200,
-                    key=f"args-{index}",
+                    key=f"args-{token}",
                 )
                 try:
                     decisions.append(edit_decision(action, parse_edited_args(edited)))
@@ -394,8 +431,15 @@ if reviews:
         st.session_state.pending_input = Command(resume={"decisions": decisions})
         st.rerun()
 
-    if not ready and not blocked:
-        st.caption("Choose a decision for each pending action.")
+    # `not blocked` already implies every action produced a decision, so this is
+    # simply the negation of `ready` — an earlier `not ready and not blocked`
+    # spelling was unsatisfiable, and the operator got a greyed-out button with no
+    # explanation at all.
+    if not ready:
+        st.caption(
+            "Choose a decision for each pending action, and fix anything flagged "
+            "above, before submitting."
+        )
 
 else:
     # A turn can also end mid-flight — the process dies between super-steps, or a
@@ -424,7 +468,7 @@ else:
         st.session_state.pending_input = {"messages": [{"role": "user", "content": prompt}]}
         st.rerun()
 
-if not reviews and not (getattr(snapshot, "values", None) or {}).get("messages"):
+if not raw_interrupts and not (getattr(snapshot, "values", None) or {}).get("messages"):
     st.info(
         "Describe the event — headcount, city, date, budget ceiling, and format. "
         "The planner shortlists venues, prices catering and AV, and stops for your "

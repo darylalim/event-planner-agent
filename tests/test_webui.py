@@ -196,6 +196,66 @@ def test_a_non_dict_interrupt_value_is_ignored_rather_than_raising():
 
 
 # --------------------------------------------------------------------------- #
+# widget identity for a pending approval
+# --------------------------------------------------------------------------- #
+
+SEND = {"name": "send_invitations", "args": {"recipient_count": 250}}
+
+
+def _token(checkpoint, index=0, action=ACTION):
+    from event_planner.webui import review_token
+
+    return review_token({"configurable": {"checkpoint_id": checkpoint}}, index, action)
+
+
+def test_widget_identity_is_stable_within_one_pending_approval():
+    """It has to survive the reruns that happen while a decision is being made.
+
+    Selecting `approve` reruns the page; if the key moved, the selection would be
+    lost and the submit button could never enable.
+    """
+    assert _token("ck-7") == _token("ck-7")
+
+
+def test_widget_identity_changes_when_the_checkpoint_advances():
+    """The bug this exists to prevent, at its root.
+
+    Resolving one approval advances the checkpoint, so the next interrupt's
+    widgets must not be the same ones — otherwise Streamlit restores the previous
+    decision and the new action renders pre-approved.
+    """
+    assert _token("ck-7") != _token("ck-8")
+
+
+def test_widget_identity_changes_with_the_action():
+    assert _token("ck-7", action=ACTION) != _token("ck-7", action=SEND)
+
+
+def test_widget_identity_changes_with_the_arguments():
+    other = {"name": "hold_venue", "args": {"venue_id": "v-loft-mission", "headcount": 45}}
+    assert _token("ck-7", action=ACTION) != _token("ck-7", action=other)
+
+
+def test_widget_identity_changes_per_pending_action():
+    """Two actions in one interrupt share a checkpoint, so index must separate."""
+    assert _token("ck-7", index=0) != _token("ck-7", index=1)
+
+
+def test_widget_identity_survives_a_config_without_a_checkpoint():
+    """Falls back to action identity rather than raising or collapsing to one key."""
+    from event_planner.webui import review_token
+
+    assert review_token(None, 0, ACTION) != review_token(None, 0, SEND)
+    assert review_token({}, 0, ACTION) == review_token(None, 0, ACTION)
+
+
+def test_widget_identity_is_a_plain_key_safe_string():
+    token = _token("ck-7")
+    assert token.isalnum()
+    assert len(token) == 16
+
+
+# --------------------------------------------------------------------------- #
 # message rendering
 # --------------------------------------------------------------------------- #
 
