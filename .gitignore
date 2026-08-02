@@ -1,5 +1,8 @@
 # Secrets
 .env
+# `.streamlit/config.toml` is committed — it is app configuration. Streamlit's
+# other file in that directory is not: it holds credentials.
+.streamlit/secrets.toml
 
 # Agent runtime state — checkpoints, per-user memory, and event files.
 # Kept outside workspace/ so the agent's filesystem tools cannot read it.

@@ -81,6 +81,14 @@ state. A second copy would drift from the graph the first time a turn failed
 halfway through; re-deriving also means a half-answered booking survives a
 browser refresh instead of being stranded.
 
+Replaying costs a full re-render on every rerun, which is why the approval gate
+is an `st.fragment`: picking a decision or editing arguments would otherwise
+replay an entire planning session — 15.7 KB of venue comparison in the recorded
+run — to redraw one segmented control. It is safe to isolate because the
+interrupt is already resolved into the panel's arguments and cannot change while
+the graph is parked waiting for an answer. Submitting escapes on purpose;
+`st.rerun()` defaults to `scope="app"`.
+
 **Artifacts download rather than export.** `/export` in the CLI writes store keys
 to `exports/`, which is why it validates those agent-chosen keys against
 traversal. The browser has no reason to write to the server's disk, so it
@@ -91,6 +99,14 @@ much easier to hit by accident than `a` + Enter is in a terminal, and `hold_venu
 starts a deposit clock. `respond` is not offered, for the same reason it is absent
 from `ALLOWED_DECISIONS`; if config ever allows it, the UI says so rather than
 silently narrowing the operator's options.
+
+`.streamlit/config.toml` binds the server to `127.0.0.1`. Streamlit's default is
+every interface, and this page has no authentication — "User id" names a tenant,
+it does not prove one — so the safe option is the default and serving it publicly
+is an explicit `--server.address` override. The theme defines both light and dark
+so the mode toggle works; `primaryColor` was picked by measuring rather than by
+eye, since Streamlit puts white text on primary buttons and the primary button
+here is the one that commits money.
 
 Without `--user`, storage scopes to the conversation thread. That is
 deliberate — a shared placeholder id would merge every unidentified operator's

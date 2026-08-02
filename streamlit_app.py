@@ -24,6 +24,11 @@ state lives outside the script:
 * Only the **next payload** is held in session state, in `pending_input`, and it
   is consumed before the turn runs so a spurious rerun cannot resubmit it.
 
+Because the transcript is re-read and re-rendered on every rerun, the approval
+gate is an `st.fragment`: choosing a decision or editing arguments would
+otherwise replay an entire planning session to redraw one segmented control.
+Submitting escapes the fragment on purpose — see `_approval_panel`.
+
 Business logic lives in `event_planner.webui` so it stays testable without a
 Streamlit runtime; this file is the page.
 """
@@ -193,6 +198,150 @@ def _stream_turn(graph: Any, payload: Any, config: dict[str, Any], ctx: PlannerC
 
 
 # --------------------------------------------------------------------------- #
+# the approval gate
+# --------------------------------------------------------------------------- #
+
+
+@st.fragment
+def _approval_panel(
+    reviews: list[tuple[dict[str, Any], list[str]]],
+    snapshot_config: Any,
+) -> None:
+    """Collect one decision per pending action and resume the graph with them.
+
+    A fragment, so picking a decision or editing arguments reruns only this
+    panel. Everything else on the page is a full-rerun cost that buys nothing
+    here: the transcript is re-read from the checkpointer and re-rendered from
+    scratch on every widget change, and by the time a booking is proposed that
+    is the whole planning session — 15.7 KB of venue comparison in the recorded
+    live run, before the operator has even chosen `edit`.
+
+    Isolation is sound because nothing in here reads state a fragment rerun
+    could miss. The interrupt is already resolved into `reviews`, and it cannot
+    change while the graph is parked waiting for this answer — the only thing
+    that advances it is the submit below.
+
+    Submitting is the deliberate exception. `st.rerun()` defaults to
+    `scope="app"`, so it escapes the fragment and the turn runs from the main
+    script against freshly read state, exactly as it did before.
+    """
+    decisions: list[dict[str, Any]] = []
+    blocked = False
+
+    for index, (action, allowed) in enumerate(reviews):
+        # Widget identity has to follow the *action*, not its position. Streamlit
+        # restores a keyed widget's value whenever that key renders again, so
+        # positional keys let a resolved approval's selection carry into the next
+        # interrupt — the new action rendering pre-approved with submit enabled,
+        # and for `edit`, prefilled with the previous action's arguments.
+        token = review_token(snapshot_config, index, action)
+
+        with st.container(border=True):
+            st.subheader(f":material/gavel: Approval required — `{action['name']}`")
+            st.badge("Irreversible", icon=":material/warning:", color="red")
+            st.caption(
+                "Irreversible from the client's point of view. Check the arguments "
+                "below against the budget before deciding."
+            )
+
+            st.caption("Proposed arguments")
+            st.json(action.get("args", {}))
+
+            # Collapsed, and as preformatted text rather than markdown. What the
+            # middleware actually puts here is boilerplate that repeats the tool
+            # name and a Python dict repr of the args — already shown above, and
+            # markdown mangles the braces. Kept rather than dropped because a
+            # future `interrupt_on` config could put something meaningful here.
+            if description := action.get("description"):
+                with st.expander("Middleware note", icon=":material/notes:"):
+                    st.code(str(description), language="text", wrap_lines=True)
+
+            if unsupported := unsupported_decisions(allowed):
+                # Say so rather than silently narrowing the operator's options.
+                st.warning(
+                    f"The agent also allows {', '.join(f'`{d}`' for d in unsupported)} here, "
+                    "which this UI does not offer. `respond` in particular is excluded by "
+                    "design: a free-text reply to a booking request invites the model to "
+                    "read commentary as confirmation. Use the CLI if you need it.",
+                    icon=":material/info:",
+                )
+
+            # From the one list, not a second literal — `SUPPORTED_DECISIONS` is
+            # what `unsupported_decisions` measures against, so a copy here could
+            # silently omit a decision while that warning stayed satisfied.
+            offered = [d for d in SUPPORTED_DECISIONS if d in allowed]
+            if not offered:
+                st.error("No decision this UI can construct is allowed.", icon=":material/block:")
+                blocked = True
+                continue
+
+            # Two steps — pick, then confirm. A single-click Approve is far easier
+            # to hit by accident in a browser than `a` + Enter is in a terminal,
+            # and `hold_venue` starts a deposit clock.
+            choice = st.segmented_control(
+                "Decision",
+                offered,
+                key=f"choice-{token}",
+                format_func=str.capitalize,
+            )
+
+            if choice == "approve":
+                decisions.append(approve_decision())
+            elif choice == "reject":
+                reason = st.text_area(
+                    "Reason (fed back to the agent)",
+                    key=f"reason-{token}",
+                    placeholder="Why this is not going ahead.",
+                )
+                decisions.append(reject_decision(reason))
+            elif choice == "edit":
+                edited = st.text_area(
+                    "Arguments to execute instead",
+                    value=json.dumps(action.get("args", {}), indent=2),
+                    height=200,
+                    key=f"args-{token}",
+                )
+                try:
+                    decisions.append(edit_decision(action, parse_edited_args(edited)))
+                except ValueError as exc:
+                    st.error(str(exc), icon=":material/data_object:")
+                    blocked = True
+            else:
+                blocked = True
+
+    # The middleware wants exactly one decision per action, in order — a mismatch
+    # raises rather than being padded, so the button stays disabled until every
+    # pending action has a well-formed decision.
+    ready = not blocked and len(decisions) == len(reviews)
+
+    with st.container(horizontal=True, vertical_alignment="center"):
+        submitted = st.button(
+            "Submit decision" if len(reviews) == 1 else f"Submit {len(reviews)} decisions",
+            type="primary",
+            disabled=not ready,
+            icon=":material/send:",
+        )
+        # `not blocked` already implies every action produced a decision, so this
+        # is simply the negation of `ready` — an earlier `not ready and not
+        # blocked` spelling was unsatisfiable, and the operator got a greyed-out
+        # button with no explanation at all.
+        if not ready:
+            st.caption(
+                "Choose a decision for each pending action, and fix anything flagged "
+                "above, before submitting."
+            )
+
+    # Guarded twice, deliberately. `disabled` is presentation — it stops a click
+    # in the browser but is not a promise about what reaches this branch, and a
+    # click that slipped through with nothing chosen would resume the graph with
+    # an empty decision list against middleware that wants exactly one decision
+    # per pending action.
+    if submitted and ready:
+        st.session_state.pending_input = Command(resume={"decisions": decisions})
+        st.rerun()
+
+
+# --------------------------------------------------------------------------- #
 # sidebar — rendered before any slow work, so it paints immediately
 # --------------------------------------------------------------------------- #
 
@@ -307,7 +456,11 @@ if payload is not None:
     graph_input = None if payload == RESUME_PENDING else payload
 
     try:
-        with st.spinner("Planning…"):
+        # `show_time` because a planning turn ran 672s in the recorded live run.
+        # A spinner with no elapsed time is indistinguishable from a hung page at
+        # that length, and the operator's only recourse is to reload — which
+        # abandons a turn that was working.
+        with st.spinner("Planning…", show_time=True):
             _stream_turn(graph, graph_input, config, context)
     except Exception as exc:  # noqa: BLE001 - keep the page alive, like the REPL
         st.error(f"{type(exc).__name__}: {exc}", icon=":material/error:")
@@ -378,115 +531,11 @@ if raw_interrupts and not reviews:
     )
 
 elif reviews:
+    # Rendered outside the fragment, so a fragment rerun leaves it in place
+    # rather than redrawing it. It marks the boundary between a live transcript
+    # and a decision the operator cannot take back, which is worth the weight.
     st.divider()
-    decisions: list[dict[str, Any]] = []
-    blocked = False
-
-    for index, (action, allowed) in enumerate(reviews):
-        # Widget identity has to follow the *action*, not its position. Streamlit
-        # restores a keyed widget's value whenever that key renders again, so
-        # positional keys let a resolved approval's selection carry into the next
-        # interrupt — the new action rendering pre-approved with submit enabled,
-        # and for `edit`, prefilled with the previous action's arguments.
-        token = review_token(getattr(snapshot, "config", None), index, action)
-
-        with st.container(border=True):
-            st.subheader(f":material/gavel: Approval required — `{action['name']}`")
-            st.caption("This action is irreversible from the client's point of view.")
-
-            st.json(action.get("args", {}))
-
-            # Collapsed, and as preformatted text rather than markdown. What the
-            # middleware actually puts here is boilerplate that repeats the tool
-            # name and a Python dict repr of the args — already shown above, and
-            # markdown mangles the braces. Kept rather than dropped because a
-            # future `interrupt_on` config could put something meaningful here.
-            if description := action.get("description"):
-                with st.expander("Middleware note", icon=":material/notes:"):
-                    st.code(str(description), language="text", wrap_lines=True)
-
-            if unsupported := unsupported_decisions(allowed):
-                # Say so rather than silently narrowing the operator's options.
-                st.warning(
-                    f"The agent also allows {', '.join(f'`{d}`' for d in unsupported)} here, "
-                    "which this UI does not offer. `respond` in particular is excluded by "
-                    "design: a free-text reply to a booking request invites the model to "
-                    "read commentary as confirmation. Use the CLI if you need it.",
-                    icon=":material/info:",
-                )
-
-            # From the one list, not a second literal — `SUPPORTED_DECISIONS` is
-            # what `unsupported_decisions` measures against, so a copy here could
-            # silently omit a decision while that warning stayed satisfied.
-            offered = [d for d in SUPPORTED_DECISIONS if d in allowed]
-            if not offered:
-                st.error("No decision this UI can construct is allowed.", icon=":material/block:")
-                blocked = True
-                continue
-
-            # Two steps — pick, then confirm. A single-click Approve is far easier
-            # to hit by accident in a browser than `a` + Enter is in a terminal,
-            # and `hold_venue` starts a deposit clock.
-            choice = st.segmented_control(
-                "Decision",
-                offered,
-                key=f"choice-{token}",
-                format_func=str.capitalize,
-            )
-
-            if choice == "approve":
-                decisions.append(approve_decision())
-            elif choice == "reject":
-                reason = st.text_area(
-                    "Reason (fed back to the agent)",
-                    key=f"reason-{token}",
-                    placeholder="Why this is not going ahead.",
-                )
-                decisions.append(reject_decision(reason))
-            elif choice == "edit":
-                edited = st.text_area(
-                    "Arguments to execute instead",
-                    value=json.dumps(action.get("args", {}), indent=2),
-                    height=200,
-                    key=f"args-{token}",
-                )
-                try:
-                    decisions.append(edit_decision(action, parse_edited_args(edited)))
-                except ValueError as exc:
-                    st.error(str(exc), icon=":material/data_object:")
-                    blocked = True
-            else:
-                blocked = True
-
-    # The middleware wants exactly one decision per action, in order — a mismatch
-    # raises rather than being padded, so the button stays disabled until every
-    # pending action has a well-formed decision.
-    ready = not blocked and len(decisions) == len(reviews)
-    submitted = st.button(
-        "Submit decision" if len(reviews) == 1 else f"Submit {len(reviews)} decisions",
-        type="primary",
-        disabled=not ready,
-        icon=":material/send:",
-    )
-
-    # Guarded twice, deliberately. `disabled` is presentation — it stops a click
-    # in the browser but is not a promise about what reaches this branch, and a
-    # click that slipped through with nothing chosen would resume the graph with
-    # an empty decision list against middleware that wants exactly one decision
-    # per pending action.
-    if submitted and ready:
-        st.session_state.pending_input = Command(resume={"decisions": decisions})
-        st.rerun()
-
-    # `not blocked` already implies every action produced a decision, so this is
-    # simply the negation of `ready` — an earlier `not ready and not blocked`
-    # spelling was unsatisfiable, and the operator got a greyed-out button with no
-    # explanation at all.
-    if not ready:
-        st.caption(
-            "Choose a decision for each pending action, and fix anything flagged "
-            "above, before submitting."
-        )
+    _approval_panel(reviews, getattr(snapshot, "config", None))
 
 else:
     # A turn can also end mid-flight — the process dies between super-steps, or a

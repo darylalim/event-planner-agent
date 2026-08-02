@@ -46,6 +46,19 @@ a checkout still gets the front end from `uv sync` alone and CI's plain `uv sync
 runs the AppTest suite unchanged. A **non-dev** install that wants the page needs
 `uv sync --extra web` (or `pip install '.[web]'`); `uv run event-planner` never does.
 
+`.streamlit/config.toml` is committed app configuration, read only by `streamlit run` —
+the CLI, the test suite, and `langgraph dev` never see it, and `AppTest` ignores its
+server settings. Two entries there are behavioural rather than cosmetic. `server.address`
+pins the bind to `127.0.0.1`, because Streamlit's default is every interface and this page
+has no authentication — "User id" is a free-text field, so anyone who can reach the port
+can name any tenant. Serving it publicly is now an explicit `--server.address` override
+rather than the default. The theme defines **both** `[theme.light]` and `[theme.dark]`; a
+single `[theme]` block locks the app to one mode and removes the toggle. `primaryColor` is
+`#5850EC` because Streamlit renders white text on primary buttons, so that colour has to
+clear 4.5:1 against white *and* 3:1 against each background — the obvious indigo-500
+(`#6366F1`) fails the first at 4.47:1, and the primary button here is the one that commits
+money. `.streamlit/secrets.toml` is gitignored; credentials stay in `.env`.
+
 Ruff is configured in `pyproject.toml` but is **not** a dependency — run it with
 `uvx ruff check .`. The rule set is chosen so the `# noqa` codes in the source
 (`BLE001` on the three deliberate blind excepts) suppress rules that are actually
@@ -159,6 +172,17 @@ write lock makes a concurrent browser turn fail outright with "database is locke
 page can only report as a lost turn. Connections are also closed on cache eviction via
 `close_persistence` — `st.cache_resource(max_entries=...)` bounds how many entries it keeps but
 does not close what it drops, and the cache key includes a free-text model field.
+
+**The approval panel is an `st.fragment`, so it must not read fresh graph state.**
+`_approval_panel` reruns in isolation on every widget change — that is the point, since
+the alternative replays the whole checkpointed transcript to redraw one segmented
+control. It is only sound because everything it needs is already resolved into its
+`reviews` argument and cannot change while the graph is parked. Adding a `graph.get_state`
+or a `snapshot.` read *inside* it reintroduces staleness that no test will catch:
+`AppTest._run` builds a fresh `LocalScriptRunner` per call and never passes a
+`fragment_id_queue`, so under test the fragment only ever executes inline during a full
+run. Submitting escapes deliberately — `st.rerun()` defaults to `scope="app"`, which is
+what lets the turn run from the main script against freshly read state.
 
 **A disabled Streamlit button is not a guard.** `disabled=` stops a click in the browser
 and says nothing about what reaches the branch behind it. The approval submit button

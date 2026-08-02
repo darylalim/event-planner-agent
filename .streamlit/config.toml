@@ -1,0 +1,113 @@
+# Configuration for the Streamlit front end (`uv run streamlit run streamlit_app.py`).
+#
+# Read only by `streamlit run`. The CLI, the test suite, and `langgraph dev` are
+# unaffected by anything in this file.
+
+[server]
+# There is no authentication in front of this page. "User id" is a free-text
+# field, so anyone who can reach the port can name any tenant and read that
+# tenant's memories and event files. The module docstring has said "bind it to
+# localhost" since the page was written, which only helps an operator who reads
+# docstrings and remembers a flag — so it is the default here instead.
+#
+# Serving this on a routable address is a deliberate act: override it on the
+# command line (`--server.address 0.0.0.0`) and put an auth layer in front.
+address = "127.0.0.1"
+
+[browser]
+# The transcript this page renders contains client names, headcounts, guest
+# counts, and budgets. Usage stats carry none of that, but a tool whose whole
+# design rationale is tenant isolation should not be phoning home by default.
+gatherUsageStats = false
+
+
+# --------------------------------------------------------------------------- #
+# theme
+#
+# Shared tokens live in [theme]; the two mode blocks override only colour.
+# Defining both [theme.light] and [theme.dark] is what puts the light/dark
+# toggle in the app's settings menu — a single [theme] block locks the app to
+# one mode, which is the wrong default for a tool someone leaves open all day.
+#
+# No webfont. Google Fonts would mean the page fetching from a third-party host
+# on every load, which sits badly with an app documented as loopback-only and
+# handling client PII — and the font would silently fall back offline anyway.
+# To opt in, uncomment these:
+#   font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+#   codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+# --------------------------------------------------------------------------- #
+
+[theme]
+baseFontSize = 15
+baseFontWeight = 400
+codeFontSize = "0.85rem"
+# Tighter than the default scale. The page is `layout="centered"`, so a 40px h1
+# over a one-line caption reads as a landing page rather than a working tool.
+headingFontSizes = ["30px", "24px", "20px", "17px", "15px", "13px"]
+headingFontWeights = [600, 600, 600, 600, 500, 500]
+baseRadius = "8px"
+buttonRadius = "8px"
+# Borders on unfocused widgets, because the approval panel is a stack of inputs
+# inside a bordered container and they need to read as separate targets.
+showWidgetBorder = true
+showSidebarBorder = true
+linkUnderline = false
+
+[theme.light]
+# #5850EC is the one indigo that clears WCAG AA on both counts in both modes:
+# 5.56:1 for the white text Streamlit puts on primary buttons, and >=3:1 against
+# each mode's background so the button's own edge is discernible. The obvious
+# pick (#6366F1, indigo-500) fails the first at 4.47:1 — worth measuring rather
+# than eyeballing, since the primary button here is the one that commits money.
+primaryColor = "#5850EC"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#FAFAFA"
+codeBackgroundColor = "#F4F4F5"
+textColor = "#09090B"
+linkColor = "#4338CA"
+borderColor = "#E4E4E7"
+codeTextColor = "#18181B"
+# Semantic colours, all >=4.5:1 as text on this background. The red one is
+# load-bearing: it is the "Irreversible" badge on the approval panel.
+redColor = "#DC2626"
+orangeColor = "#C2410C"
+yellowColor = "#A16207"
+greenColor = "#15803D"
+blueColor = "#2563EB"
+violetColor = "#7C3AED"
+grayColor = "#71717A"
+
+[theme.dark]
+primaryColor = "#5850EC"
+backgroundColor = "#0E0E11"
+secondaryBackgroundColor = "#18181B"
+codeBackgroundColor = "#18181B"
+textColor = "#E4E4E7"
+linkColor = "#A5B4FC"
+borderColor = "#27272A"
+codeTextColor = "#E4E4E7"
+redColor = "#F87171"
+orangeColor = "#FB923C"
+yellowColor = "#FACC15"
+greenColor = "#4ADE80"
+blueColor = "#60A5FA"
+violetColor = "#A78BFA"
+grayColor = "#A1A1AA"
+
+[theme.light.sidebar]
+# One step back from the transcript, which is where the operator's attention
+# belongs. The sidebar is settings and downloads, not the work.
+backgroundColor = "#FAFAFA"
+secondaryBackgroundColor = "#F4F4F5"
+codeBackgroundColor = "#F4F4F5"
+textColor = "#09090B"
+borderColor = "#E4E4E7"
+primaryColor = "#5850EC"
+
+[theme.dark.sidebar]
+backgroundColor = "#141417"
+secondaryBackgroundColor = "#1F1F23"
+codeBackgroundColor = "#1F1F23"
+textColor = "#E4E4E7"
+borderColor = "#27272A"
+primaryColor = "#5850EC"
