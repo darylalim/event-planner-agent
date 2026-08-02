@@ -16,7 +16,7 @@ what you need to *change code* safely.
 uv sync                                    # install (uv required; .python-version pins 3.14)
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 90 tests, ~1.5s, fully offline
+uv run pytest                              # 91 tests, ~1.5s, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -26,6 +26,7 @@ uv run event-planner --user alice@example.com --thread offsite-2026
 uv run langgraph dev                       # LangGraph Studio (host supplies persistence)
 
 uvx ruff check .                           # lint  — config in pyproject.toml, not a dep
+uvx ruff format .                          # format — enforced by CI, run before committing
 uvx ty check                               # types — config in pyproject.toml, not a dep
 ```
 
