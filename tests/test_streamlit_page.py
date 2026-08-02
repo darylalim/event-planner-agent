@@ -356,6 +356,29 @@ def test_an_approval_answered_elsewhere_is_not_resubmitted(page):
     assert len(at.chat_input) == 1
 
 
+def test_the_panel_reads_no_graph_state_while_rendering(page):
+    """The fragment's isolation is only sound while the panel renders from its args.
+
+    A fragment rerun does not re-execute the main script, so any graph read the
+    panel performed at *render* time would be served from a snapshot the page
+    never refreshed — the panel would show one thing and act on another. The
+    submit path deliberately does read the graph, but only after the operator has
+    committed, which is why the count below is taken across a plain widget
+    interaction rather than a submission.
+
+    Asserted by counting reads rather than by inspecting the source, because the
+    hazard is a call appearing anywhere in the panel, including inside a helper.
+    `AppTest` cannot drive a real fragment-scoped rerun (it builds a fresh
+    `LocalScriptRunner` per call and never sets `fragment_id_queue`), so this
+    invariant is what stands in for that coverage.
+    """
+    at, fake = page(_interrupt())
+    assert fake.reads == 1  # the main script's single read
+
+    at.segmented_control[0].set_value("edit").run()
+    assert fake.reads == 2  # one more from the main script, none from the panel
+
+
 def test_a_failed_resume_does_not_leave_the_panel_pre_armed(page):
     """A turn that dies before advancing must not rebuild the panel pre-approved.
 

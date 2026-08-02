@@ -185,6 +185,15 @@ page can only report as a lost turn. Connections are also closed on cache evicti
 `close_persistence` — `st.cache_resource(max_entries=...)` bounds how many entries it keeps but
 does not close what it drops, and the cache key includes a free-text model field.
 
+**Model prose reaches `st.markdown`, which renders `$...$` as LaTeX.** Any line quoting
+two costs — which in this domain is most of them — has the span between them swallowed and
+re-set as italic mathematics. Seen live on the `hold_venue` recommendation: "$10,281 —
+$1,719 under your $12,000 ceiling" rendered as an equation. `webui.markdown_safe` escapes
+bare `$` and every render path in the page goes through it (assistant prose, the operator's
+own message on both the replay and the echo, and the tool-call captions). Adding a new
+`st.markdown`/`st.caption` that carries model or operator text needs it too; `st.code` and
+`st.json` do not, since neither parses markdown.
+
 **The approval panel is an `st.fragment`, so it must not read fresh graph state.**
 `_approval_panel` reruns in isolation on every widget change — that is the point, since
 the alternative replays the whole checkpointed transcript to redraw one segmented

@@ -65,6 +65,7 @@ from event_planner.webui import (
     degraded_capability_note,
     download_name,
     edit_decision,
+    markdown_safe,
     message_text,
     open_persistence,
     parse_edited_args,
@@ -154,9 +155,10 @@ def _render_ai(message: Any) -> None:
         return
     with st.chat_message("assistant"):
         if text:
-            st.markdown(text)
+            st.markdown(markdown_safe(text))
         for call in calls:
-            st.caption(f":material/build: **{call['name']}** — {brief_args(call.get('args', {}))}")
+            args = markdown_safe(brief_args(call.get("args", {})))
+            st.caption(f":material/build: **{call['name']}** — {args}")
 
 
 def _render_tool(message: Any) -> None:
@@ -182,7 +184,7 @@ def _render(message: Any) -> None:
     kind = getattr(message, "type", None)
     if kind == "human":
         with st.chat_message("user"):
-            st.markdown(message_text(message))
+            st.markdown(markdown_safe(message_text(message)))
     elif kind == "ai":
         _render_ai(message)
     elif kind == "tool":
@@ -509,7 +511,7 @@ if payload is not None:
         # runs, so render it now rather than letting it vanish for a whole turn.
         for entry in payload.get("messages", []):
             with st.chat_message("user"):
-                st.markdown(entry["content"])
+                st.markdown(markdown_safe(entry["content"]))
 
     # A plain string sentinel rather than a module constant: the page is re-exec'd
     # on every rerun, so an `object()` marker would be a different identity by the

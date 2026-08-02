@@ -71,6 +71,7 @@ __all__ = [
     "degraded_capability_note",
     "download_name",
     "edit_decision",
+    "markdown_safe",
     "message_text",
     "open_persistence",
     "parse_edited_args",
@@ -121,6 +122,26 @@ def message_text(message: Any) -> str:
 def tool_calls_of(message: Any) -> list[dict[str, Any]]:
     """Tool calls attached to a message, or an empty list."""
     return list(getattr(message, "tool_calls", None) or [])
+
+
+#: A `$` that Streamlit's markdown would treat as opening or closing LaTeX.
+_BARE_DOLLAR = re.compile(r"(?<!\\)\$")
+
+
+def markdown_safe(text: str) -> str:
+    """Escape `$` so costs render as costs and not as mathematics.
+
+    `st.markdown` renders `$...$` as LaTeX and offers no switch to turn it off.
+    A planner's prose is mostly dollar amounts, so any line quoting two of them
+    — "$3,200 day rate ... $1,900 AV" — has the span between them swallowed and
+    re-set in italic serif, taking the figures with it.
+
+    Found on the live `hold_venue` recommendation this front end exists to gate:
+    the totals an operator is asked to check ("$10,281 ... $1,719 under your
+    $12,000 ceiling") rendered as an equation. Escaping every bare `$` costs the
+    model the ability to emit LaTeX, which for this domain is the right trade.
+    """
+    return _BARE_DOLLAR.sub(r"\\$", text)
 
 
 # --------------------------------------------------------------------------- #

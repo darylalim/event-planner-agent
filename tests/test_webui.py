@@ -25,6 +25,7 @@ from event_planner.webui import (
     approve_decision,
     download_name,
     edit_decision,
+    markdown_safe,
     message_text,
     open_persistence,
     parse_edited_args,
@@ -92,6 +93,42 @@ def test_rejection_reads_as_a_human_decision_not_a_tool_failure():
 
 def test_rejection_without_a_reason_still_explains_itself():
     assert "No reason given." in reject_decision("   ")["message"]
+
+
+# --------------------------------------------------------------------------- #
+# costs must render as costs
+# --------------------------------------------------------------------------- #
+
+
+def test_two_costs_on_one_line_do_not_become_latex():
+    """`st.markdown` reads `$...$` as LaTeX, and planner prose is full of costs.
+
+    Verbatim from the live `hold_venue` recommendation this front end gates: the
+    span between the two amounts was swallowed and re-set as italic mathematics,
+    taking the figures the operator is asked to check with it.
+    """
+    rendered = markdown_safe("Venue $3,200 · AV $1,900 · Catering $4,050")
+    assert rendered == r"Venue \$3,200 · AV \$1,900 · Catering \$4,050"
+    # Nothing left that Streamlit would pair off into a maths span.
+    assert "$" not in rendered.replace(r"\$", "")
+
+
+def test_the_ceiling_comparison_survives():
+    """The single most load-bearing sentence in an approval."""
+    assert markdown_safe("$10,281 — $1,719 under your $12,000 ceiling") == (
+        r"\$10,281 — \$1,719 under your \$12,000 ceiling"
+    )
+
+
+def test_an_already_escaped_dollar_is_left_alone():
+    """Escaping twice would show the operator a stray backslash."""
+    assert markdown_safe(r"\$3,200") == r"\$3,200"
+
+
+def test_text_without_costs_is_untouched():
+    assert markdown_safe("Dogpatch Studio, Thursday 12 March 2026.") == (
+        "Dogpatch Studio, Thursday 12 March 2026."
+    )
 
 
 # --------------------------------------------------------------------------- #

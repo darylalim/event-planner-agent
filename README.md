@@ -323,10 +323,32 @@ That last one was a **gap this run found**: the page originally had no
 affordance for a turn stranded with `next` set and nothing to approve, so the
 thread would have sat on an unfinished tool call for good. Fixed, with tests.
 
-**Not run live:** `budget.md`, the `hold_venue` proposal, and the approval gate
-in the browser. Both interruptions landed before the gate.
+**Since run live:** the `hold_venue` proposal and the approval gate in the
+browser, on a separate thread and database (30 guests, SF, $12k ceiling,
+standing reception). The `edit` decision was exercised end to end — headcount 30
+→ 24 and a corrected client name — and the agent absorbed both, opening its next
+turn with "the approval came back with two corrections I've absorbed" and
+reworking the budget at 24 guests. That closes the gap recorded here: the browser
+reaches the resume through the same call as the CLI, and the proposing
+`AIMessage` carried thinking blocks that were replayed on resume.
 
-Most of that gap turned out to be closable offline, and was:
+It also confirmed the fragment: selecting `edit` and editing the arguments
+redrew only the panel, leaving the transcript above untouched, and submitting
+escaped to a full app run.
+
+`approve` and `reject` were not re-run from the browser. Both are recorded as
+verified for the CLI above, and `test_reject_matches_the_cli_byte_for_byte` /
+`test_edit_matches_the_cli` pin the browser's payloads against the CLI's, so what
+would differ is the decision dict — which is exactly what those tests compare.
+
+**The run found a rendering bug.** `st.markdown` reads `$...$` as LaTeX, so any
+line quoting two costs had the span between them swallowed and re-set as italic
+mathematics: "$10,281 — $1,719 under your $12,000 ceiling" rendered as an
+equation, taking the figures an operator is asked to check with it. Every
+amount in the proposal was affected. Fixed by escaping bare `$` before rendering
+(`webui.markdown_safe`), with the live strings pinned as tests.
+
+Before that run, most of the gap had already been closed offline:
 
 - **The payload shape is pinned against the package rather than a fixture.**
   The middleware builds the interrupt, not the model, so a *scripted* model is
@@ -343,10 +365,20 @@ Most of that gap turned out to be closable offline, and was:
   `graph.stream(Command(resume=...))` on the same graph with the same config and
   adds nothing to it, and the CLI's version is recorded as verified above.
 
-What genuinely remains is the model-dependent part: a real proposing `AIMessage`
-carries signed thinking blocks, and resuming replays them to the API. That is
-recorded as verified for the CLI, and the browser reaches it through the same
-call — but it has not been exercised from the browser.
+What that could not reach was the model-dependent part: a real proposing
+`AIMessage` carries signed thinking blocks, and resuming replays them to the API.
+The `edit` run above exercised it from the browser, which is what turned this
+from an argument into a result — and it is also what surfaced the `$`-as-LaTeX
+bug, which no offline test would have caught because a scripted model does not
+write costed prose.
+
+What remains genuinely unreachable offline is the fragment's own execution mode.
+`AppTest` builds a fresh `LocalScriptRunner` per call and never sets
+`fragment_id_queue`, so `_approval_panel` only ever runs inline there; the
+browser's replay from `MemoryFragmentStorage` is covered by the live run above
+and not by the suite. The invariant that makes the isolation safe — that the
+panel reads no graph state while rendering — is pinned by
+`test_the_panel_reads_no_graph_state_while_rendering`.
 
 ## Notes on `deepagents` 0.7.1
 
