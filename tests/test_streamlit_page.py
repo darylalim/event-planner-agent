@@ -69,9 +69,17 @@ class FakeGraph:
         # `send_invitations` in the same script run.
         self.then = then
         self.checkpoint = 0
+        # Counts reads so a test can resolve the interrupt *between* two of them,
+        # which is where the concurrent-session race actually lives.
+        self.reads = 0
+        self.resolve_after_reads = None
 
     def get_state(self, config):
-        interrupts = (SimpleNamespace(value=self.interrupt),) if self.interrupt else ()
+        self.reads += 1
+        interrupt = self.interrupt
+        if self.resolve_after_reads is not None and self.reads > self.resolve_after_reads:
+            interrupt = None
+        interrupts = (SimpleNamespace(value=interrupt),) if interrupt else ()
         return SimpleNamespace(
             values={"messages": self.messages},
             interrupts=interrupts,
@@ -306,6 +314,38 @@ def test_a_second_interrupt_gets_its_own_widget_identity(page):
     assert any("send_invitations" in s.value for s in at.subheader)
     assert at.segmented_control[0].key != first_key
     assert at.button[0].disabled
+
+
+def test_an_approval_answered_elsewhere_is_not_resubmitted(page):
+    """Another session can answer the interrupt between the render and the click.
+
+    The panel is an `st.fragment`, so its `reviews` are as old as the last full
+    run and a fragment rerun does not refresh them. Both front ends share one
+    database by default and `_resources` caches one graph across browser
+    sessions, so a CLI turn or a second tab on this thread can resolve the
+    interrupt while the panel still shows it. Before the panel was a fragment the
+    Submit click was itself a full rerun — it re-read the snapshot, found nothing
+    pending, and never rendered the button; the compare-and-swap in
+    `_approval_panel` is what replaces that accidental fail-closed with a
+    deliberate one.
+
+    The race is simulated where it really happens: the interrupt survives the
+    page's read of the snapshot and is gone by the panel's read, one call later.
+    Without the check, this submits `Command(resume=...)` into a graph that is no
+    longer asking for anything.
+    """
+    at, fake = page(_interrupt())
+    at.segmented_control[0].set_value("approve").run()
+
+    # Reads so far: initial run, then the `set_value` rerun. The click's run
+    # reads once from the main script (third) and once from the panel (fourth).
+    fake.resolve_after_reads = fake.reads + 1
+    at.button[0].click().run()
+
+    assert fake.sent == []
+    assert any("already been answered" in w.value for w in at.warning)
+    # And the page has moved on rather than re-offering a decision on it.
+    assert len(at.chat_input) == 1
 
 
 def test_an_unreadable_interrupt_fails_closed(page):

@@ -1,14 +1,20 @@
 # Configuration for the Streamlit front end (`uv run streamlit run streamlit_app.py`).
 #
-# Read only by `streamlit run`. The CLI, the test suite, and `langgraph dev` are
-# unaffected by anything in this file.
+# Streamlit resolves this file from the **current working directory**, not from
+# the directory holding the script — so everything below applies when the app is
+# launched from the repo root and silently does not otherwise. That includes
+# `pytest`, which also runs from the repo root: no server is started, so the
+# `[server]` block is inert there, but a `runner.*` or `global.*` option added
+# here would change how the test suite executes. `langgraph dev` and the CLI
+# never read it.
 
 [server]
 # There is no authentication in front of this page. "User id" is a free-text
 # field, so anyone who can reach the port can name any tenant and read that
-# tenant's memories and event files. The module docstring has said "bind it to
-# localhost" since the page was written, which only helps an operator who reads
-# docstrings and remembers a flag — so it is the default here instead.
+# tenant's memories and event files. Streamlit's default binds every interface,
+# so this is the safe default made explicit — but see the CWD caveat above: a
+# config file cannot enforce itself, and `streamlit_app.py` checks this option
+# at startup and warns in the page when the effective bind is not loopback.
 #
 # Serving this on a routable address is a deliberate act: override it on the
 # command line (`--server.address 0.0.0.0`) and put an auth layer in front.
@@ -67,8 +73,11 @@ textColor = "#09090B"
 linkColor = "#4338CA"
 borderColor = "#E4E4E7"
 codeTextColor = "#18181B"
-# Semantic colours, all >=4.5:1 as text on this background. The red one is
-# load-bearing: it is the "Irreversible" badge on the approval panel.
+# Semantic colours, all >=4.5:1 as *text* on this background. That is not what a
+# badge renders: given only `redColor`, Streamlit derives the badge fill from it
+# at 10% opacity (20% in dark) and the badge text at ±15% lightness, so the
+# "Irreversible" badge on the approval panel shows neither value below. Measure
+# the derived pairing, not this one, before changing `redColor`.
 redColor = "#DC2626"
 orangeColor = "#C2410C"
 yellowColor = "#A16207"

@@ -46,18 +46,30 @@ a checkout still gets the front end from `uv sync` alone and CI's plain `uv sync
 runs the AppTest suite unchanged. A **non-dev** install that wants the page needs
 `uv sync --extra web` (or `pip install '.[web]'`); `uv run event-planner` never does.
 
-`.streamlit/config.toml` is committed app configuration, read only by `streamlit run` —
-the CLI, the test suite, and `langgraph dev` never see it, and `AppTest` ignores its
-server settings. Two entries there are behavioural rather than cosmetic. `server.address`
-pins the bind to `127.0.0.1`, because Streamlit's default is every interface and this page
-has no authentication — "User id" is a free-text field, so anyone who can reach the port
-can name any tenant. Serving it publicly is now an explicit `--server.address` override
-rather than the default. The theme defines **both** `[theme.light]` and `[theme.dark]`; a
-single `[theme]` block locks the app to one mode and removes the toggle. `primaryColor` is
-`#5850EC` because Streamlit renders white text on primary buttons, so that colour has to
-clear 4.5:1 against white *and* 3:1 against each background — the obvious indigo-500
-(`#6366F1`) fails the first at 4.47:1, and the primary button here is the one that commits
-money. `.streamlit/secrets.toml` is gitignored; credentials stay in `.env`.
+`.streamlit/config.toml` is committed app configuration. **Streamlit resolves it from the
+current working directory, not from the script's directory** — measured: from another CWD
+`config.get_option("server.address")` comes back `None`, Streamlit's bind-to-every-interface
+default, and the theme silently vanishes too. So it is not the property of the app it reads
+like; it is a property of being launched from the repo root. `streamlit_app.py` therefore
+checks `server.address` at runtime and warns in the page when the bind is not loopback,
+because a config file cannot enforce itself. That bind matters because the page has no
+authentication — "User id" is a free-text field, so anyone who can reach the port can name
+any tenant.
+
+CWD-resolution also means the **test suite does read this file**: pytest runs from the repo
+root, so `AppTest` picks up the project config. No server is started, so `server.*` is
+inert there, but a `runner.*` or `global.*` option added here would change how tests
+execute. `langgraph dev` and the CLI are unaffected — neither is `streamlit run`.
+
+The theme defines **both** `[theme.light]` and `[theme.dark]`; a single `[theme]` block
+locks the app to one mode and removes the toggle. `primaryColor` is `#5850EC` because
+Streamlit renders white text on primary buttons, so that colour has to clear 4.5:1 against
+white *and* 3:1 against each background — the obvious indigo-500 (`#6366F1`) fails the
+first at 4.47:1, and the primary button here is the one that commits money. Note those
+measurements do **not** describe badges: given only `redColor`, Streamlit derives the badge
+fill at 10%/20% opacity and the badge text at ±15% lightness, so `st.badge(color="red")`
+renders neither the configured colour nor the pairing that was measured.
+`.streamlit/secrets.toml` is gitignored; credentials stay in `.env`.
 
 Ruff is configured in `pyproject.toml` but is **not** a dependency — run it with
 `uvx ruff check .`. The rule set is chosen so the `# noqa` codes in the source

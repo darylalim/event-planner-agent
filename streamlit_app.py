@@ -5,9 +5,16 @@ remains the reference implementation; this is the same graph, the same
 persistence, and the same approval gates behind a browser UI.
 
 There is no authentication. "User id" is a free-text field, so anyone who can
-reach the port can name any tenant and read that tenant's stored files — bind it
-to localhost (`--server.address 127.0.0.1`) and do not put it on a shared network
-without an auth layer in front.
+reach the port can name any tenant and read that tenant's stored files. Do not
+put it on a shared network without an auth layer in front.
+
+`.streamlit/config.toml` binds the server to loopback, but Streamlit reads that
+file from the **current working directory** rather than from this script's
+directory — so it applies to `uv run streamlit run streamlit_app.py` from the
+repo root and not to the same script launched from anywhere else. Since the
+config cannot enforce itself, the page checks `server.address` at startup and
+says so in the browser when the bind is not loopback; `--server.address 127.0.0.1`
+still works and is the fix when it fires.
 
 The turn loop is inverted relative to `cli._run_turn`. That loop blocks on
 `input()` until the operator decides; a Streamlit script cannot block, because it
@@ -202,10 +209,21 @@ def _stream_turn(graph: Any, payload: Any, config: dict[str, Any], ctx: PlannerC
 # --------------------------------------------------------------------------- #
 
 
+def _review_tokens(
+    snapshot_config: Any, reviews: list[tuple[dict[str, Any], list[str]]]
+) -> list[str]:
+    """Identity of a whole pending set, for comparing one against another."""
+    return [
+        review_token(snapshot_config, index, action) for index, (action, _) in enumerate(reviews)
+    ]
+
+
 @st.fragment
 def _approval_panel(
     reviews: list[tuple[dict[str, Any], list[str]]],
     snapshot_config: Any,
+    graph: Any,
+    config: dict[str, Any],
 ) -> None:
     """Collect one decision per pending action and resume the graph with them.
 
@@ -216,14 +234,19 @@ def _approval_panel(
     is the whole planning session — 15.7 KB of venue comparison in the recorded
     live run, before the operator has even chosen `edit`.
 
-    Isolation is sound because nothing in here reads state a fragment rerun
-    could miss. The interrupt is already resolved into `reviews`, and it cannot
-    change while the graph is parked waiting for this answer — the only thing
-    that advances it is the submit below.
+    What that isolation costs is the page's accidental fail-closed. `reviews` is
+    captured on the last *full* run and a fragment rerun does not refresh it, so
+    it goes stale whenever something else answers this interrupt first — another
+    browser tab on the same thread, or a CLI turn, since both front ends share
+    one database by default and `_resources` caches one graph across sessions.
+    Before this was a fragment, the Submit click was itself a full rerun: it
+    re-read the snapshot, found no pending review, and never rendered the button
+    at all. That has to be made explicit rather than quietly lost, so the submit
+    below re-reads state and compares before it resumes anything.
 
-    Submitting is the deliberate exception. `st.rerun()` defaults to
-    `scope="app"`, so it escapes the fragment and the turn runs from the main
-    script against freshly read state, exactly as it did before.
+    Submitting is the deliberate exception to the isolation. `st.rerun()`
+    defaults to `scope="app"`, so it escapes the fragment and the turn runs from
+    the main script against freshly read state, exactly as it did before.
     """
     decisions: list[dict[str, Any]] = []
     blocked = False
@@ -238,11 +261,10 @@ def _approval_panel(
 
         with st.container(border=True):
             st.subheader(f":material/gavel: Approval required — `{action['name']}`")
+            # The badge carries "irreversible"; the caption is the instruction,
+            # not a restatement of it.
             st.badge("Irreversible", icon=":material/warning:", color="red")
-            st.caption(
-                "Irreversible from the client's point of view. Check the arguments "
-                "below against the budget before deciding."
-            )
+            st.caption("Check these against the budget file before deciding.")
 
             st.caption("Proposed arguments")
             st.json(action.get("args", {}))
@@ -314,22 +336,23 @@ def _approval_panel(
     # pending action has a well-formed decision.
     ready = not blocked and len(decisions) == len(reviews)
 
-    with st.container(horizontal=True, vertical_alignment="center"):
-        submitted = st.button(
-            "Submit decision" if len(reviews) == 1 else f"Submit {len(reviews)} decisions",
-            type="primary",
-            disabled=not ready,
-            icon=":material/send:",
+    submitted = st.button(
+        "Submit decision" if len(reviews) == 1 else f"Submit {len(reviews)} decisions",
+        type="primary",
+        disabled=not ready,
+        icon=":material/send:",
+    )
+    # `not blocked` already implies every action produced a decision, so this is
+    # simply the negation of `ready` — an earlier `not ready and not blocked`
+    # spelling was unsatisfiable, and the operator got a greyed-out button with
+    # no explanation at all. On its own line rather than beside the button: it is
+    # two lines of prose, and in a horizontal row on a centered layout it squeezes
+    # the button it is explaining.
+    if not ready:
+        st.caption(
+            "Choose a decision for each pending action, and fix anything flagged "
+            "above, before submitting."
         )
-        # `not blocked` already implies every action produced a decision, so this
-        # is simply the negation of `ready` — an earlier `not ready and not
-        # blocked` spelling was unsatisfiable, and the operator got a greyed-out
-        # button with no explanation at all.
-        if not ready:
-            st.caption(
-                "Choose a decision for each pending action, and fix anything flagged "
-                "above, before submitting."
-            )
 
     # Guarded twice, deliberately. `disabled` is presentation — it stops a click
     # in the browser but is not a promise about what reaches this branch, and a
@@ -337,7 +360,21 @@ def _approval_panel(
     # an empty decision list against middleware that wants exactly one decision
     # per pending action.
     if submitted and ready:
-        st.session_state.pending_input = Command(resume={"decisions": decisions})
+        # Compare-and-swap against live state, because `reviews` is as old as the
+        # last full run. If another session answered this interrupt in between,
+        # resuming would push decisions at a graph that is no longer asking — so
+        # re-derive instead and let the main script render whatever is actually
+        # pending. This is the one place the fragment reads the graph, and it
+        # reads it *after* the operator has committed rather than while
+        # rendering, so it cannot serve a stale panel.
+        live = graph.get_state(config)
+        current = pending_reviews(getattr(live, "interrupts", None))
+        if _review_tokens(getattr(live, "config", None), current) == _review_tokens(
+            snapshot_config, reviews
+        ):
+            st.session_state.pending_input = Command(resume={"decisions": decisions})
+        else:
+            st.session_state.stale_approval = True
         st.rerun()
 
 
@@ -388,6 +425,24 @@ if (problem := credentials_problem()) is not None:
 
 if (note := degraded_capability_note()) is not None:
     st.caption(f":material/info: {note}")
+
+# `.streamlit/config.toml` pins the bind to loopback, but Streamlit resolves
+# project config from the *current working directory*, not from the script's
+# directory — verified: with CWD elsewhere, `server.address` comes back `None`,
+# which is Streamlit's bind-to-every-interface default. So `streamlit run
+# /path/to/streamlit_app.py` from a home directory, or a unit file with a
+# different WorkingDirectory, serves this page publicly and silently. The config
+# cannot enforce itself, so the page says so: "User id" names a tenant, it does
+# not prove one, and there is no auth layer here to make that safe.
+if st.get_option("server.address") not in ("127.0.0.1", "localhost", "::1"):
+    st.warning(
+        "This page is not bound to loopback, so anyone who can reach this port "
+        "can read any tenant's memories and event files by typing their user id. "
+        "`.streamlit/config.toml` only applies when Streamlit is launched from "
+        "the repo root — restart from there, or pass "
+        "`--server.address 127.0.0.1`.",
+        icon=":material/lock_open:",
+    )
 
 # The CLI takes `--db`; a Streamlit script has no argv to read, so the same knob
 # is an environment variable. Both default to the same file, so the two front
@@ -516,6 +571,17 @@ with stored_slot:
 raw_interrupts = getattr(snapshot, "interrupts", None)
 reviews = pending_reviews(raw_interrupts)
 
+# Set by the approval panel when the interrupt it was showing had already been
+# answered elsewhere by the time Submit was clicked. Popped, so it is said once.
+if st.session_state.pop("stale_approval", False):
+    st.warning(
+        "That approval had already been answered — by another tab, or by a CLI "
+        "session on this thread. **Your decision was not submitted**, and nothing "
+        "was executed on its behalf. The transcript above shows how it was "
+        "resolved.",
+        icon=":material/sync_problem:",
+    )
+
 if raw_interrupts and not reviews:
     # Fail closed. The graph is holding an unanswered tool call, so rendering the
     # normal chat input would let a follow-up run against a thread with a
@@ -535,7 +601,7 @@ elif reviews:
     # rather than redrawing it. It marks the boundary between a live transcript
     # and a decision the operator cannot take back, which is worth the weight.
     st.divider()
-    _approval_panel(reviews, getattr(snapshot, "config", None))
+    _approval_panel(reviews, getattr(snapshot, "config", None), graph, config)
 
 else:
     # A turn can also end mid-flight — the process dies between super-steps, or a

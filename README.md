@@ -100,12 +100,15 @@ starts a deposit clock. `respond` is not offered, for the same reason it is abse
 from `ALLOWED_DECISIONS`; if config ever allows it, the UI says so rather than
 silently narrowing the operator's options.
 
-`.streamlit/config.toml` binds the server to `127.0.0.1`. Streamlit's default is
-every interface, and this page has no authentication — "User id" names a tenant,
-it does not prove one — so the safe option is the default and serving it publicly
-is an explicit `--server.address` override. The theme defines both light and dark
-so the mode toggle works; `primaryColor` was picked by measuring rather than by
-eye, since Streamlit puts white text on primary buttons and the primary button
+`.streamlit/config.toml` binds the server to `127.0.0.1`, since Streamlit's
+default is every interface and this page has no authentication — "User id" names
+a tenant, it does not prove one. That only holds when the app is launched from
+the repo root, because Streamlit resolves the file from the current working
+directory rather than from the script's; the page checks the effective
+`server.address` at startup and warns in the browser when it is not loopback,
+because a config file cannot enforce itself. The theme defines both light and
+dark so the mode toggle works; `primaryColor` was picked by measuring rather than
+by eye, since Streamlit puts white text on primary buttons and the primary button
 here is the one that commits money.
 
 Without `--user`, storage scopes to the conversation thread. That is
