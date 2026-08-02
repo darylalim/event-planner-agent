@@ -47,12 +47,44 @@ uv run event-planner                                  # interactive CLI
 uv run event-planner --user alice@example.com         # scoped memory
 uv run event-planner --thread offsite-2026            # named conversation
 uv run event-planner --max-steps 400                  # longer planning session
+uv run streamlit run streamlit_app.py                 # browser UI
 uv run langgraph dev                                  # LangGraph Studio
 uv run pytest                                         # harness tests
 ```
 
 In the CLI: `/state` lists what is stored for the current user, `/export` writes
 their event files to `exports/`, and `/exit` quits.
+
+### Browser UI
+
+`streamlit_app.py` is the same graph, the same SQLite persistence, and the same
+approval gates behind a web front end. Thread, user id, and model are sidebar
+fields rather than flags; stored memories and event files are listed there too,
+as downloads. It reads the same `.env`, and shares `.state/planner.sqlite` with
+the CLI unless `EVENT_PLANNER_DB` points it elsewhere — so a plan started in the
+terminal resumes in the browser on the same thread.
+
+Two differences are deliberate rather than incidental:
+
+**The turn loop is inverted.** `cli._run_turn` blocks on `input()` until the
+operator decides. A Streamlit script cannot block — it runs top to bottom and
+ends, then reruns on the next interaction. So the transcript is replayed from the
+checkpointer on every rerun and the pending approval is re-derived from
+`StateSnapshot.interrupts`, rather than either being accumulated in session
+state. A second copy would drift from the graph the first time a turn failed
+halfway through; re-deriving also means a half-answered booking survives a
+browser refresh instead of being stranded.
+
+**Artifacts download rather than export.** `/export` in the CLI writes store keys
+to `exports/`, which is why it validates those agent-chosen keys against
+traversal. The browser has no reason to write to the server's disk, so it
+doesn't — and a second copy of that check is a second thing to get wrong.
+
+Approval is two steps: pick a decision, then submit. A single-click *Approve* is
+much easier to hit by accident than `a` + Enter is in a terminal, and `hold_venue`
+starts a deposit clock. `respond` is not offered, for the same reason it is absent
+from `ALLOWED_DECISIONS`; if config ever allows it, the UI says so rather than
+silently narrowing the operator's options.
 
 Without `--user`, storage scopes to the conversation thread. That is
 deliberate — a shared placeholder id would merge every unidentified operator's
@@ -235,6 +267,45 @@ The `edit` run surfaced a nice property: the agent noticed the executed
 arguments differed from what it proposed and flagged the discrepancy in a
 comparison table rather than silently accepting the change.
 
+### Browser UI, partially verified live
+
+A brief driven through `streamlit_app.py` against `claude-opus-5` (40 guests,
+SF, $18k ceiling, seated lunch + 45-minute presentation), on thread `default`
+as `demo@example.com`. **It did not finish** — see the gap below.
+
+Confirmed:
+
+- **Streaming renders incrementally.** Tool calls appear as captions and results
+  as collapsed expanders while the turn is still running.
+- **Skills load on demand.** Both `venue-sourcing` and `budget-modeling` were
+  read before any planning.
+- **Delegation works through the UI.** Two subagents ran: `venue-researcher`
+  wrote a 15.7 KB `venues.md`, `vendor-researcher` wrote `vendors.md`.
+- **Storage routes per user.** Event files landed under
+  `event_planner/events/u/demo@example_com-7462108984f6`.
+- **Isolation is visible in the product.** `acme-planner`'s `/AGENTS.md` sits in
+  the same database and the sidebar correctly reported "no memories yet" for
+  `demo@example.com`.
+- **The transcript survives losing the server.** The host reaped the background
+  process mid-turn (twice, at ~10 minutes), and a fresh process replayed the
+  whole transcript from the checkpointer — the payoff for reading history from
+  `graph.get_state()` rather than accumulating it in session state.
+- **A stranded turn can be picked up.** Being killed mid-`task` left the thread
+  at `next=('tools',)` with no interrupt to answer. Streaming `None` continued
+  the pending node and the vendor-researcher ran to completion.
+
+That last one was a **gap this run found**: the page originally had no
+affordance for a turn stranded with `next` set and nothing to approve, so the
+thread would have sat on an unfinished tool call for good. Fixed, with tests.
+
+**Not yet verified:** `budget.md`, the `hold_venue` proposal, and the approval
+gate rendering and resuming in the browser. Both interruptions landed before the
+gate. Note the decision *payloads* are pinned equal to the CLI's by
+`test_reject_matches_the_cli_byte_for_byte` and `test_edit_matches_the_cli`, and
+the CLI's live resume-with-thinking-blocks is recorded above — so what remains
+unconfirmed is the page rendering a real interrupt end to end, not the decisions
+it builds.
+
 ## Notes on `deepagents` 0.7.1
 
 Three places where the published guidance and the installed package disagree.
@@ -255,20 +326,24 @@ All were found by inspecting the package, and all are covered by tests:
 ## Layout
 
 ```
+streamlit_app.py  the browser front end — the page, and nothing else of consequence
 src/event_planner/
   agent.py        harness wiring — backend, memory, skills, approval gates
   subagents.py    the three researcher subagents
   prompts.py      orchestrator + subagent system prompts
   context.py      per-user memory namespacing
   cli.py          interactive REPL with approval prompts
+  webui.py        logic the page delegates to, testable without a Streamlit runtime
   tools/          catalog (stub) · budget (real) · bookings (stub) · search (live)
 workspace/        the agent's filesystem view — shared, so skills only
   skills/         venue-sourcing · budget-modeling
 .state/           checkpoints, memory, event files   (gitignored, out of reach)
 exports/          /export output                     (gitignored)
 tests/
-  test_harness.py      approval gates, tool binding, config guards, step budget
-  test_security.py     tenant isolation — reachability, namespaces, fail-closed
-  test_approval_cli.py the operator's approve/edit/reject prompt
-  test_tools.py        tool correctness — dates, budgets, booking refusals
+  test_harness.py        approval gates, tool binding, config guards, step budget
+  test_security.py       tenant isolation — reachability, namespaces, fail-closed
+  test_approval_cli.py   the operator's approve/edit/reject prompt
+  test_webui.py          the web front end's decisions, incl. parity with the CLI
+  test_streamlit_page.py the real page driven through Streamlit's AppTest
+  test_tools.py          tool correctness — dates, budgets, booking refusals
 ```

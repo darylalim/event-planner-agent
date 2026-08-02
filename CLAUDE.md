@@ -16,13 +16,14 @@ what you need to *change code* safely.
 uv sync                                    # install (uv required; .python-version pins 3.14)
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 91 tests, ~1.5s, fully offline
+uv run pytest                              # 152 tests, ~3s, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
 
 uv run event-planner                       # interactive CLI
 uv run event-planner --user alice@example.com --thread offsite-2026
+uv run streamlit run streamlit_app.py      # browser UI (EVENT_PLANNER_DB overrides the db)
 uv run langgraph dev                       # LangGraph Studio (host supplies persistence)
 
 uvx ruff check .                           # lint  — config in pyproject.toml, not a dep
@@ -124,7 +125,32 @@ tool goes in that list — never in two hand-maintained copies.
 free-text reply to a booking request invites the model to read commentary as confirmation.
 Relatedly, `cli._resolve_choice` never matches ambiguously (`reject`/`respond` share `r`),
 and `_decline_message` frames refusals as a human decision so the model doesn't read them
-as a tool error and retry.
+as a tool error and retry. `webui.SUPPORTED_DECISIONS` holds the same three and reports
+anything else as unsupported rather than rendering it.
+
+**Two front ends can now refuse a booking, and they must do it identically.**
+`webui.py` imports `_decline_message`, `_check_db_outside_workspace`, and
+`DEFAULT_MAX_STEPS` from `cli.py` rather than restating them — the wording of a refusal
+is behavioural, not cosmetic, and a divergent copy would surface only as a booking
+retried after a human said no. `test_reject_matches_the_cli_byte_for_byte` and
+`test_edit_matches_the_cli` drive `cli._prompt_one` with scripted stdin and compare its
+payload against the web builder's. What the web UI deliberately does *not* mirror is
+`cli._export`: it offers downloads, which construct no server-side path, so the traversal
+check that makes `_export` safe has exactly one copy.
+
+**A disabled Streamlit button is not a guard.** `disabled=` stops a click in the browser
+and says nothing about what reaches the branch behind it. The approval submit button
+checks `ready` again in the handler; the first version did not, and
+`test_submitting_with_no_decision_sends_nothing` caught it resuming the graph with an
+empty decision list.
+
+**A turn can stop with `next` set and no interrupt.** That is not an approval waiting to
+be answered — it is an unfinished tool call, and LangGraph continues it by streaming
+`None`. The web UI shows a resume button for it, keyed off `snapshot.next`; without one
+the thread sits on the pending node and every later message queues behind it. Found live
+when the host reaped the server mid-`task`. The approval branch takes precedence, since a
+real interrupt also leaves `next` set — `test_a_pending_approval_takes_precedence_over_resume`
+guards that ordering.
 
 **State lives outside `workspace/`.** `.state/` is a *sibling*. A SQLite file under the
 agent's root would expose every user's memories and every thread's checkpoints in raw
@@ -170,7 +196,16 @@ The model is faked throughout (`ScriptedModel` in `conftest.py`, which stubs `bi
 to record what was bound). Tests cover the harness — approval gating, storage routing, tool
 binding, step budget — not model quality, and must keep running without an API key or
 network. Files are split by concern: `test_harness.py`, `test_security.py`,
-`test_approval_cli.py`, `test_tools.py`.
+`test_approval_cli.py`, `test_webui.py`, `test_streamlit_page.py`, `test_tools.py`.
+
+`test_streamlit_page.py` runs the real page through `streamlit.testing.v1.AppTest`,
+which execs the script and exposes its widgets. Two things make that work: the page
+imports `build_agent` at exec time, so patching `event_planner.agent.build_agent`
+before `.run()` substitutes a fake graph; and `st.cache_resource.clear()` between cases
+is required, since the page caches the graph across reruns by design. `ANTHROPIC_API_KEY`
+is set to a dummy value only to clear the credential gate — no model is built and nothing
+leaves the process. Prefer this over asserting on rendering helpers: the bugs live in the
+wiring, and the disabled-button bug above was invisible to every unit-level test.
 
 Stub tools (`search_venues`, `check_availability`, `search_vendors`, `hold_venue`,
 `send_invitations`) are deterministic on purpose so a behaviour regression is visible rather
