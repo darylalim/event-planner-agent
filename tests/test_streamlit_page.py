@@ -59,8 +59,12 @@ def _interrupt(allowed=("approve", "edit", "reject"), actions=(HOLD,)):
 class FakeGraph:
     """Stands in for the compiled graph: records what a decision resumes with."""
 
-    def __init__(self, interrupt=None, messages=(), next_nodes=(), then=None):
+    def __init__(self, interrupt=None, messages=(), next_nodes=(), then=None, stream_error=None):
         self.sent = []
+        # Raised instead of advancing, modelling the dangerous shape of failure:
+        # the turn dies before any state change, so the checkpoint id — and hence
+        # `review_token` — is unchanged when the panel renders again.
+        self.stream_error = stream_error
         self.interrupt = interrupt
         self.messages = list(messages)
         self.next_nodes = tuple(next_nodes)
@@ -91,6 +95,8 @@ class FakeGraph:
 
     def stream(self, payload, config=None, context=None, stream_mode=None):
         self.sent.append(payload)
+        if self.stream_error is not None:
+            raise self.stream_error
         self.checkpoint += 1
         # Running clears the pending approval and the pending node, like the real
         # graph — and may immediately raise the next interrupt.
@@ -108,8 +114,10 @@ class FakeGraph:
 def page(tmp_path, monkeypatch):
     """Run the real page against a fake graph and return `(AppTest, FakeGraph)`."""
 
-    def _run(interrupt=None, messages=(), api_key=True, next_nodes=(), then=None):
-        fake = FakeGraph(interrupt, messages, next_nodes, then)
+    def _run(
+        interrupt=None, messages=(), api_key=True, next_nodes=(), then=None, stream_error=None
+    ):
+        fake = FakeGraph(interrupt, messages, next_nodes, then, stream_error)
         monkeypatch.setattr("event_planner.agent.build_agent", lambda **_kwargs: fake)
         monkeypatch.setenv("EVENT_PLANNER_DB", str(tmp_path / "planner.sqlite"))
 
@@ -346,6 +354,32 @@ def test_an_approval_answered_elsewhere_is_not_resubmitted(page):
     assert any("already been answered" in w.value for w in at.warning)
     # And the page has moved on rather than re-offering a decision on it.
     assert len(at.chat_input) == 1
+
+
+def test_a_failed_resume_does_not_leave_the_panel_pre_armed(page):
+    """A turn that dies before advancing must not rebuild the panel pre-approved.
+
+    `review_token` mixes in the checkpoint id, which only moves when the graph
+    does. So a resume that raises first — a locked database while the CLI holds
+    the write lock, a 429, the server reaped mid-turn — leaves the identical
+    token, and Streamlit restores a keyed widget's value whenever that key
+    renders again. The panel then came back under an error message with `approve`
+    still selected and the primary button live: one reflexive click on a page
+    that had just failed, executing a booking nobody re-confirmed. That is
+    exactly what the two-step pick-then-confirm gate exists to prevent, so the
+    widget identity carries the attempt count as well as the checkpoint.
+    """
+    at, fake = page(_interrupt(), stream_error=RuntimeError("database is locked"))
+    at.segmented_control[0].set_value("approve").run()
+    at.button[0].click().run()
+
+    assert fake.decisions == [[{"type": "approve"}]]  # it was genuinely attempted
+    assert any("database is locked" in err.value for err in at.error)
+
+    # Still pending, and it has to be decided again rather than re-clicked.
+    assert any("Approval required" in s.value for s in at.subheader)
+    assert at.segmented_control[0].value is None
+    assert at.button[0].disabled
 
 
 def test_an_unreadable_interrupt_fails_closed(page):

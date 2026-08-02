@@ -202,6 +202,16 @@ checks `ready` again in the handler; the first version did not, and
 `test_submitting_with_no_decision_sends_nothing` caught it resuming the graph with an
 empty decision list.
 
+**Approval widget identity also carries the turn attempt, not just the checkpoint.**
+`review_token` mixes in the checkpoint id, which only advances when the graph does — so a
+resume that raises *before* any state change (locked database, 429, server reaped mid-turn)
+rebuilds the panel under an identical token, and Streamlit restores the decision the
+operator just submitted: primary button live, one reflexive click from executing a booking
+nobody re-confirmed. `streamlit_app.py` bumps `st.session_state.turn_attempt` on every
+attempt and prefixes the token with it, so a failed turn costs a deliberate re-decision.
+`test_a_failed_resume_does_not_leave_the_panel_pre_armed` drives it with a graph that
+raises before advancing.
+
 **Approval widget keys follow the action, never its position.** Streamlit restores a
 keyed widget's value whenever a widget with that key renders again. With `key=f"choice-{index}"`,
 resolving one approval and immediately interrupting for a *different* action reused the key,

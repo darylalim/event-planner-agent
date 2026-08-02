@@ -222,6 +222,7 @@ def _review_tokens(
 def _approval_panel(
     reviews: list[tuple[dict[str, Any], list[str]]],
     snapshot_config: Any,
+    attempt: int,
     graph: Any,
     config: dict[str, Any],
 ) -> None:
@@ -257,7 +258,12 @@ def _approval_panel(
         # positional keys let a resolved approval's selection carry into the next
         # interrupt — the new action rendering pre-approved with submit enabled,
         # and for `edit`, prefilled with the previous action's arguments.
-        token = review_token(snapshot_config, index, action)
+        #
+        # `attempt` closes the same hole for a turn that *failed*: the checkpoint
+        # id inside `review_token` only advances when the graph does, so a resume
+        # that raised before any state change would otherwise rebuild these
+        # widgets with the operator's last decision restored and submit live.
+        token = f"{attempt}-{review_token(snapshot_config, index, action)}"
 
         with st.container(border=True):
             st.subheader(f":material/gavel: Approval required — `{action['name']}`")
@@ -510,6 +516,17 @@ if payload is not None:
     # time it came back out of session state.
     graph_input = None if payload == RESUME_PENDING else payload
 
+    # Counts turn *attempts*, not successes, and feeds approval widget identity.
+    # The checkpoint id already distinguishes one interrupt from the next, but it
+    # only advances when the graph does — so a resume that fails before any state
+    # change (a locked database, a 429, the server reaped mid-turn) leaves the
+    # identical token, and Streamlit restores the decision that was just
+    # submitted: the panel comes back under an error message with the primary
+    # button already live, one reflexive click from executing a booking nobody
+    # re-confirmed. Bumping here means every attempt yields fresh widgets, so a
+    # failed turn costs a deliberate re-decision rather than a single click.
+    st.session_state.turn_attempt = st.session_state.get("turn_attempt", 0) + 1
+
     try:
         # `show_time` because a planning turn ran 672s in the recorded live run.
         # A spinner with no elapsed time is indistinguishable from a hung page at
@@ -601,7 +618,13 @@ elif reviews:
     # rather than redrawing it. It marks the boundary between a live transcript
     # and a decision the operator cannot take back, which is worth the weight.
     st.divider()
-    _approval_panel(reviews, getattr(snapshot, "config", None), graph, config)
+    _approval_panel(
+        reviews,
+        getattr(snapshot, "config", None),
+        st.session_state.get("turn_attempt", 0),
+        graph,
+        config,
+    )
 
 else:
     # A turn can also end mid-flight — the process dies between super-steps, or a
