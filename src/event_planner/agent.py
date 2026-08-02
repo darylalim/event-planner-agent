@@ -3,19 +3,26 @@
 Backend layout — the load-bearing decision in this file:
 
     CompositeBackend
-      default        -> FilesystemBackend(root_dir=workspace)   ephemeral-ish, on disk
-      "/memories/"   -> StoreBackend(namespace=per-user)        persists across sessions
+      "/memories/"   -> StoreBackend(namespace=per-user)       persists across sessions
+      "/events/"     -> StoreBackend(namespace=per-user)       persists across sessions
+      default        -> FilesystemBackend(root_dir=workspace)  on disk, shared by everyone
 
-`CompositeBackend` matches the longest route prefix first, so anything the
-agent writes under `/memories/` lands in the LangGraph store and survives the
-thread; everything else is an ordinary file in the workspace directory.
+`CompositeBackend` matches the longest route prefix first, and the filesystem
+backend is the **default** rather than a route — so a path matching no route
+does not fail, it lands on a root that every session can read. Anything the
+agent writes under `/memories/` or `/events/` goes to the LangGraph store in
+that user's namespace and survives the thread; everything else is an ordinary
+file in the workspace directory, visible to every other planner. See
+`build_backend` for why `/events/` in particular has to be routed.
 
-Two things worth knowing if you change this:
+Three things worth knowing if you change this:
 
 * `FilesystemBackend` is rooted at `workspace/`, not the repo root, and runs
-  with `virtual_mode=True`. The agent therefore cannot read or write its own
-  source. Do not repoint `root_dir` at the repo, and do not use this backend in
-  a server process that handles untrusted input.
+  with `virtual_mode=True`, which blocks `..`, `~`, and absolute paths outside
+  the root. The agent therefore cannot read or write its own source. Those are
+  path guardrails, not process isolation: do not repoint `root_dir` at the
+  repo, and do not use this backend in a server process that handles untrusted
+  input.
 * `interrupt_on` silently does nothing without a checkpointer. The build below
   will refuse to hand back an un-gated agent rather than let that pass quietly.
 * `TodoListMiddleware` is added explicitly. Despite what the Deep Agents docs

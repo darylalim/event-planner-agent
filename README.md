@@ -131,13 +131,15 @@ orchestrator (claude-opus-5)
 
 ### Storage
 
-A `CompositeBackend` routes by path prefix, longest match first:
+A `CompositeBackend` routes by path prefix, longest match first. The filesystem
+backend is the **default**, not a route, so an unrouted path doesn't fail — it
+lands on the shared root:
 
 | Path | Backend | Lifetime |
 | --- | --- | --- |
 | `/memories/` | `StoreBackend`, namespaced per user | Across sessions |
 | `/events/` | `StoreBackend`, namespaced per user | Across sessions |
-| `/skills/` | `FilesystemBackend` rooted at `workspace/` | On disk, shared |
+| everything else (`/skills/`) | `FilesystemBackend` rooted at `workspace/` | On disk, shared |
 
 The filesystem backend is rooted at `workspace/`, **not** the repo root, and
 runs with `virtual_mode=True` — the agent cannot read or write its own source.
