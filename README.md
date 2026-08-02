@@ -304,13 +304,30 @@ That last one was a **gap this run found**: the page originally had no
 affordance for a turn stranded with `next` set and nothing to approve, so the
 thread would have sat on an unfinished tool call for good. Fixed, with tests.
 
-**Not yet verified:** `budget.md`, the `hold_venue` proposal, and the approval
-gate rendering and resuming in the browser. Both interruptions landed before the
-gate. Note the decision *payloads* are pinned equal to the CLI's by
-`test_reject_matches_the_cli_byte_for_byte` and `test_edit_matches_the_cli`, and
-the CLI's live resume-with-thinking-blocks is recorded above — so what remains
-unconfirmed is the page rendering a real interrupt end to end, not the decisions
-it builds.
+**Not run live:** `budget.md`, the `hold_venue` proposal, and the approval gate
+in the browser. Both interruptions landed before the gate.
+
+Most of that gap turned out to be closable offline, and was:
+
+- **The payload shape is pinned against the package rather than a fixture.**
+  The middleware builds the interrupt, not the model, so a *scripted* model is
+  enough to produce a genuine one: `test_the_real_middleware_payload_parses`
+  drives the real graph to a real interrupt and feeds the actual
+  `snapshot.interrupts` to the page's parser. It found two things the
+  hand-written fixtures had wrong — `review_configs` entries also carry
+  `action_name`, and `description` is generated boilerplate repeating the tool
+  name and a dict repr of the args, which the page had been rendering as
+  markdown prose directly under the same arguments.
+- **The decisions are byte-identical to the CLI's**, pinned by
+  `test_reject_matches_the_cli_byte_for_byte` and `test_edit_matches_the_cli`.
+- **The resume path is the CLI's.** The page calls
+  `graph.stream(Command(resume=...))` on the same graph with the same config and
+  adds nothing to it, and the CLI's version is recorded as verified above.
+
+What genuinely remains is the model-dependent part: a real proposing `AIMessage`
+carries signed thinking blocks, and resuming replays them to the API. That is
+recorded as verified for the CLI, and the browser reaches it through the same
+call — but it has not been exercised from the browser.
 
 ## Notes on `deepagents` 0.7.1
 

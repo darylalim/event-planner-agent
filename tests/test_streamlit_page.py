@@ -27,17 +27,32 @@ from streamlit.testing.v1 import AppTest
 
 APP = Path(__file__).resolve().parents[1] / "streamlit_app.py"
 
-HOLD = {
-    "name": "hold_venue",
-    "args": {"venue_id": "v-loft-mission", "headcount": 60},
-    "description": "Places a provisional hold and starts a deposit clock.",
-}
+HOLD = {"name": "hold_venue", "args": {"venue_id": "v-loft-mission", "headcount": 60}}
+
+
+def _boilerplate(action):
+    """What `HumanInTheLoopMiddleware` actually writes into `description`.
+
+    Not prose for a human — it repeats the tool name and a Python dict repr of
+    the arguments the panel already shows.
+    """
+    return f"Tool execution requires approval\n\nTool: {action['name']}\nArgs: {action['args']}"
 
 
 def _interrupt(allowed=("approve", "edit", "reject"), actions=(HOLD,)):
+    """Shaped like the payload the installed middleware really emits.
+
+    `test_the_real_middleware_payload_parses` in `test_webui.py` pins that shape
+    against the package by driving the real graph, so this fixture is checked
+    rather than merely self-consistent. Two details came from there: the
+    `review_configs` entries carry `action_name`, and `description` is generated.
+    """
     return {
-        "action_requests": list(actions),
-        "review_configs": [{"allowed_decisions": list(allowed)} for _ in actions],
+        "action_requests": [{**action, "description": _boilerplate(action)} for action in actions],
+        "review_configs": [
+            {"action_name": action["name"], "allowed_decisions": list(allowed)}
+            for action in actions
+        ],
     }
 
 

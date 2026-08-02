@@ -395,8 +395,15 @@ elif reviews:
             st.caption("This action is irreversible from the client's point of view.")
 
             st.json(action.get("args", {}))
-            if action.get("description"):
-                st.markdown(action["description"])
+
+            # Collapsed, and as preformatted text rather than markdown. What the
+            # middleware actually puts here is boilerplate that repeats the tool
+            # name and a Python dict repr of the args — already shown above, and
+            # markdown mangles the braces. Kept rather than dropped because a
+            # future `interrupt_on` config could put something meaningful here.
+            if description := action.get("description"):
+                with st.expander("Middleware note", icon=":material/notes:"):
+                    st.code(str(description), language="text", wrap_lines=True)
 
             if unsupported := unsupported_decisions(allowed):
                 # Say so rather than silently narrowing the operator's options.

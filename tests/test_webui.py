@@ -195,6 +195,87 @@ def test_a_non_dict_interrupt_value_is_ignored_rather_than_raising():
     assert pending_reviews([_Interrupt("something unexpected")]) == []
 
 
+def _real_interrupt(scripted):
+    """Drive the real graph to a real approval interrupt, offline.
+
+    Every other test here hands `pending_reviews` a payload written in this file,
+    which can only confirm the fixture matches itself. The middleware, not the
+    model, builds the interrupt — so a scripted model is enough to get the
+    genuine shape out of the installed package.
+    """
+    from langchain_core.messages import AIMessage
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.store.memory import InMemoryStore
+
+    from event_planner.agent import build_agent
+    from event_planner.context import PlannerContext
+
+    hold = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "hold_venue",
+                "args": {
+                    "venue_id": "v-loft-mission",
+                    "event_date": "2026-09-19",
+                    "headcount": 60,
+                    "total_cost_usd": 18000.0,
+                    "client_name": "Acme",
+                },
+                "id": "call_1",
+            }
+        ],
+    )
+    graph = build_agent(model=scripted(hold), checkpointer=InMemorySaver(), store=InMemoryStore())
+    config = {"configurable": {"thread_id": "real-payload"}, "recursion_limit": 200}
+    graph.invoke(
+        {"messages": [{"role": "user", "content": "Book it."}]},
+        config=config,
+        context=PlannerContext(user_id="probe@example.com"),
+    )
+    return graph.get_state(config)
+
+
+def test_the_real_middleware_payload_parses(scripted):
+    """What the page reads has to match what the package actually emits.
+
+    Caught two things the hand-written fixtures had wrong: `review_configs`
+    entries also carry an `action_name`, and `description` is generated
+    boilerplate repeating the tool name and a dict repr of the args rather than
+    prose meant for a human.
+    """
+    snapshot = _real_interrupt(scripted)
+    reviews = pending_reviews(snapshot.interrupts)
+
+    assert len(reviews) == 1
+    action, allowed = reviews[0]
+    assert action["name"] == "hold_venue"
+    assert action["args"]["headcount"] == 60
+    assert allowed == ["approve", "edit", "reject"]
+
+
+def test_widget_identity_works_against_a_real_snapshot(scripted):
+    """`review_token` depends on a checkpoint id a real snapshot must supply."""
+    from event_planner.webui import review_token
+
+    snapshot = _real_interrupt(scripted)
+    action, _ = pending_reviews(snapshot.interrupts)[0]
+
+    assert snapshot.config["configurable"]["checkpoint_id"]
+    assert review_token(snapshot.config, 0, action) != review_token({}, 0, action)
+
+
+def test_a_real_interrupt_also_leaves_next_set(scripted):
+    """Which is why the page checks for reviews before offering to resume.
+
+    A pending approval and a stranded turn both show `next`; only the decision
+    tells them apart.
+    """
+    snapshot = _real_interrupt(scripted)
+    assert snapshot.next
+    assert snapshot.interrupts
+
+
 # --------------------------------------------------------------------------- #
 # widget identity for a pending approval
 # --------------------------------------------------------------------------- #
