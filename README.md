@@ -36,6 +36,12 @@ uv sync
 cp .env.example .env   # then fill in ANTHROPIC_API_KEY
 ```
 
+The browser UI's dependency is a `web` **extra** rather than a core one, so the
+CLI and the LangGraph Platform image — which never import Streamlit — do not
+carry it or its ~35 transitive packages. `uv sync` in a checkout still installs
+it, because the `dev` group asks for `event-planner-agent[web]`; a non-dev
+install that wants the page needs `uv sync --extra web`.
+
 `ANTHROPIC_API_KEY` is required. `TAVILY_API_KEY` is optional — without it,
 `web_search` degrades gracefully and tells the agent to rely on the structured
 directory and flag that reputation data went unchecked.

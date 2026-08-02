@@ -392,6 +392,42 @@ def test_stored_items_reads_back_what_the_agent_wrote(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# packaging — the front end must not ride along into the deployment image
+# --------------------------------------------------------------------------- #
+
+
+def _pyproject():
+    import tomllib
+
+    from event_planner.agent import PROJECT_ROOT
+
+    return tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+def test_streamlit_is_an_extra_not_a_core_dependency():
+    """`langgraph.json` installs a plain `.`, so a core dep ships to the platform.
+
+    The deployed graph never imports Streamlit, but carrying it there pulled in
+    ~35 transitive packages — pandas, pyarrow, altair, pydeck. A bare
+    `uv add streamlit` would silently put it back.
+    """
+    project = _pyproject()["project"]
+
+    assert "streamlit" not in " ".join(project["dependencies"])
+    assert "streamlit" in " ".join(project["optional-dependencies"]["web"])
+
+
+def test_the_dev_group_pulls_the_web_extra_in():
+    """CI runs a plain `uv sync --locked`, and the suite drives the real page.
+
+    Without this self-reference the AppTest tests cannot import Streamlit and CI
+    fails on a checkout that looks correctly configured.
+    """
+    dev = " ".join(_pyproject()["dependency-groups"]["dev"])
+    assert "event-planner-agent[web]" in dev
+
+
+# --------------------------------------------------------------------------- #
 # shared with the CLI rather than copied
 # --------------------------------------------------------------------------- #
 

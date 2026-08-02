@@ -16,7 +16,7 @@ what you need to *change code* safely.
 uv sync                                    # install (uv required; .python-version pins 3.14)
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 176 tests, ~4s, fully offline
+uv run pytest                              # 178 tests, ~4s, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -37,6 +37,14 @@ current guidance for each tool, which is more reliable than working from memory:
 `/astral:uv` for anything touching dependencies, the lockfile, the Python version, or
 how a command is run; `/astral:ruff` before linting or formatting; `/astral:ty` before
 type checking. All three tools are already configured for this repo — see below.
+
+`streamlit` is a **`web` extra**, not a core dependency. `langgraph.json` installs a plain
+`.`, so leaving it in `[project.dependencies]` shipped Streamlit and ~35 transitive packages
+(pandas, pyarrow, altair, pydeck) in a deployment image whose graph never imports them — 101
+resolved packages against 65. The `dev` group self-references `event-planner-agent[web]`, so
+a checkout still gets the front end from `uv sync` alone and CI's plain `uv sync --locked`
+runs the AppTest suite unchanged. A **non-dev** install that wants the page needs
+`uv sync --extra web` (or `pip install '.[web]'`); `uv run event-planner` never does.
 
 Ruff is configured in `pyproject.toml` but is **not** a dependency — run it with
 `uvx ruff check .`. The rule set is chosen so the `# noqa` codes in the source

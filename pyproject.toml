@@ -12,11 +12,15 @@ dependencies = [
     "langgraph-checkpoint-sqlite>=3.1.1",
     "langsmith>=0.10.15",
     "python-dotenv>=1.0.1",
-    "streamlit>=1.60.0",
 ]
 
 [project.scripts]
 event-planner = "event_planner.cli:main"
+
+[project.optional-dependencies]
+web = [
+    "streamlit>=1.60.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -28,6 +32,13 @@ packages = ["src/event_planner"]
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    # Self-reference to the `web` extra, so a development checkout gets the
+    # front end from `uv sync` alone: the suite drives the real page through
+    # Streamlit's AppTest, and CI runs a plain `uv sync --locked`. What this
+    # does NOT do is put Streamlit in the built package — `langgraph.json`
+    # installs `.` with no extras, so the deployed graph, which never imports
+    # it, no longer ships it or its ~30 transitive dependencies.
+    "event-planner-agent[web]",
 ]
 
 # Ruff is deliberately NOT a dependency — run `uvx ruff check .` and

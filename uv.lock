@@ -552,11 +552,16 @@ dependencies = [
     { name = "langgraph-checkpoint-sqlite" },
     { name = "langsmith" },
     { name = "python-dotenv" },
+]
+
+[package.optional-dependencies]
+web = [
     { name = "streamlit" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "event-planner-agent", extra = ["web"] },
     { name = "pytest" },
 ]
 
@@ -569,11 +574,15 @@ requires-dist = [
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.1" },
     { name = "langsmith", specifier = ">=0.10.15" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
-    { name = "streamlit", specifier = ">=1.60.0" },
+    { name = "streamlit", marker = "extra == 'web'", specifier = ">=1.60.0" },
 ]
+provides-extras = ["web"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.1.1" }]
+dev = [
+    { name = "event-planner-agent", extras = ["web"] },
+    { name = "pytest", specifier = ">=9.1.1" },
+]
 
 [[package]]
 name = "filetype"
