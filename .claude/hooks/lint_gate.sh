@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# PostToolUse: keep ruff and ty clean on every Python edit.
+# PostToolUse: keep ruff (lint and format) and ty clean on every Python edit.
 #
-# Both are configured in pyproject.toml and both currently pass. CLAUDE.md:
-# "Both tools are clean; keep them that way rather than adding suppressions."
-# Measured cost: ruff 27ms, ty 93ms.
+# All three are configured in pyproject.toml and all three currently pass.
+# CLAUDE.md: "Both tools are clean; keep them that way rather than adding
+# suppressions." Measured cost: ruff check 27ms, ruff format --check 20ms,
+# ty 93ms.
 set -uo pipefail
 _hook_common="$(dirname "$0")/_common.sh"
 [ -r "$_hook_common" ] || {
@@ -16,6 +17,11 @@ _hook_common="$(dirname "$0")/_common.sh"
 # failure on code nobody touched -- ty in particular is pre-1.0 and its default
 # diagnostic set still moves. The manual commands in CLAUDE.md are deliberately
 # unpinned; bump these two deliberately when you bump those.
+#
+# .github/workflows/ci.yml pins the same two versions and its `static` job
+# greps THIS file to fail when the two disagree, so bumping one and forgetting
+# the other is caught rather than silently splitting local and CI behaviour.
+# Keep the `RUFF="..."` / `TY="..."` spelling below; that canary matches on it.
 RUFF="ruff@0.16.1"
 TY="ty@0.0.65"
 
@@ -39,9 +45,8 @@ runnable() { uvx "$1" --version >/dev/null 2>&1; }
 status=0
 infra=
 report=
+unformatted=0
 
-# `ruff check`, never `ruff format`. Formatting is deliberately unenforced here
-# and would rewrite files the linter is happy with -- see pyproject.toml:32.
 lint=$(uvx "$RUFF" check "$rel" 2>&1)
 if [ $? -ne 0 ]; then
   if runnable "$RUFF"; then
@@ -49,6 +54,22 @@ if [ $? -ne 0 ]; then
     report="$lint"
   else
     infra="${infra}ruff ($RUFF) could not be run:"$'\n'"$lint"$'\n'
+  fi
+fi
+
+# Formatting IS enforced, as of .github/workflows/ci.yml -- see pyproject.toml,
+# which used to say the opposite. `--check` reports rather than rewrites: a
+# hook that reformatted the file underneath an in-flight edit would race the
+# tool call that triggered it, and the model would be diffing against content
+# it never wrote. The fix is one command, printed below when this trips.
+fmt=$(uvx "$RUFF" format --check "$rel" 2>&1)
+if [ $? -ne 0 ]; then
+  if runnable "$RUFF"; then
+    status=1
+    unformatted=1
+    report="${report:+$report$'\n\n'}$fmt"
+  else
+    infra="${infra}ruff ($RUFF) could not be run:"$'\n'"$fmt"$'\n'
   fi
 fi
 
@@ -78,11 +99,14 @@ fi
 
 if [ "$status" -ne 0 ]; then
   {
-    echo "Lint/type gate failed after editing $rel:"
+    echo "Lint/format/type gate failed after editing $rel:"
     echo
     printf '%s\n' "$report"
     echo
     echo "Fix the finding rather than adding a suppression."
+    # Formatting is the one finding with a mechanical fix, and saying so beats
+    # letting the model hand-wrap lines until ruff happens to agree with it.
+    [ "$unformatted" -eq 1 ] && echo "For the formatting finding: uvx $RUFF format $rel"
   } >&2
   exit 2
 fi
