@@ -1,4 +1,4 @@
-# event-planner-agent
+# Event Planner Agent
 
 [![CI](https://github.com/darylalim/event-planner-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/darylalim/event-planner-agent/actions/workflows/ci.yml)
 
