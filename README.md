@@ -353,8 +353,14 @@ genuinely absent rather than merely hidden. Opening one panel took the DOM to a
 single code block and the budget breakdown appeared. The other six
 `estimate_budget result` panels stayed shut, which is what per-panel widget
 identity buys: with a label-derived key all seven share one key, and they would
-have opened together. Only the toggle needed a browser — `AppTest` exposes no
-`.open` on an expander — so it is the one part of this the suite cannot reach.
+have opened together.
+
+The suite reaches this too, contrary to a claim recorded here earlier. A gated
+expander is a widget, so it registers its key in session state, and setting that
+key opens the panel under `AppTest` — `test_an_opened_panel_renders_its_body`
+and `test_opening_one_panel_leaves_the_others_closed` drive exactly the two
+behaviours the browser run showed. What the browser added was scale and the DOM
+measurement, not the only possible coverage.
 
 `approve` and `reject` were not re-run from the browser. Both are recorded as
 verified for the CLI above, and `test_reject_matches_the_cli_byte_for_byte` /

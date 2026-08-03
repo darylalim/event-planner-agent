@@ -237,6 +237,96 @@ def test_repeated_tool_names_get_distinct_panels(page):
     assert [s.label for s in _panels(at)] == ["estimate_budget result"] * 7
 
 
+def _panel_keys(at):
+    """The panel widget keys registered in session state.
+
+    A gated expander is a stateful widget, so it registers its key — which is
+    also how a test opens one, since there is no `.open` setter on the block.
+    """
+    return sorted(k for k in at.session_state.filtered_state if k.startswith("tool-"))
+
+
+def test_an_opened_panel_renders_its_body(page):
+    """The other half of the gate: closed hides, open must still show.
+
+    Without this, a regression that left `panel.open` permanently false would
+    hide every tool result in the app forever and the rest of the suite would
+    stay green — every other assertion here is about content being *absent*.
+    """
+    at, _ = page(messages=[_tool("search_venues", "MISSION LOFT")])
+    assert not any("MISSION LOFT" in c.value for c in at.code)
+
+    at.session_state[_panel_keys(at)[0]] = True
+    at.run()
+
+    assert any("MISSION LOFT" in c.value for c in at.code)
+
+
+def test_opening_one_panel_leaves_the_others_closed(page):
+    """Per-panel identity, asserted directly rather than inferred from silence.
+
+    `test_repeated_tool_names_get_distinct_panels` only shows that seven panels
+    coexist. This shows they are seven *separate* widgets: with one shared key
+    they would open together. Confirmed in a browser on the recorded
+    `full-brief-3` thread, where opening one budget breakdown left the other six
+    shut.
+    """
+    at, _ = page(messages=[_tool("estimate_budget", f"total {i}", f"call-{i}") for i in range(7)])
+    keys = _panel_keys(at)
+    assert len(keys) == 7
+
+    at.session_state[keys[3]] = True
+    at.run()
+
+    assert [c.value for c in at.code] == ["total 3"]
+
+
+def test_two_results_sharing_one_call_id_do_not_kill_the_page(page):
+    """A duplicate key raises, and that is not a rendering glitch — it is fatal.
+
+    An exception at this point takes the whole page: no transcript, no chat
+    input, and no approval panel for a booking that may still be parked behind
+    one. Two `ToolMessage`s can share a `tool_call_id` — a resumed node
+    re-emitting, a replay overlapping a mid-stream render — so the second falls
+    back to an unkeyed panel. Unkeyed means ungated, which is why its body is
+    the one that renders here.
+    """
+    at, _ = page(
+        messages=[
+            _tool("estimate_budget", "first", "call-dup"),
+            _tool("estimate_budget", "second", "call-dup"),
+        ]
+    )
+
+    assert not at.exception
+    assert len(_panels(at)) == 2
+    assert len(at.chat_input) == 1
+    assert [c.value for c in at.code] == ["second"]
+
+
+def test_panels_are_inert_on_a_run_that_streams_a_turn(page):
+    """A gated panel is a widget, and toggling one mid-turn would abort the turn.
+
+    `on_change="rerun"` posts a rerun request; Streamlit services it at the next
+    `st.*` call — most of them are implicit yield points — by raising
+    `RerunException`, which subclasses `BaseException`, so the turn's `except
+    Exception` does not catch it and `graph.stream` is abandoned. The transcript
+    replays *before* the turn streams, so those panels would be live widgets for
+    the whole turn. A planning turn ran 672s in the recorded live session; a
+    stray click on a venue comparison must not cost it.
+
+    Mirrors `submit_mode="disable"` on the chat box: no turn-interrupting
+    control stays live while a turn is in flight.
+    """
+    at, _ = page(messages=[_tool("search_venues", "MISSION LOFT")])
+    assert _panel_keys(at)  # idle: a widget, and openable
+
+    at.chat_input[0].set_value("85 guests in SF").run()
+
+    assert not at.exception
+    assert _panel_keys(at) == []  # mid-turn: nothing to click
+
+
 def test_a_tool_result_with_no_identity_still_renders(page):
     """Without a stable key the page must degrade, not raise.
 
@@ -444,11 +534,9 @@ def test_a_full_rerun_while_parked_keeps_an_in_progress_decision(page):
     `turn_attempt` advances on a turn and the checkpoint id advances when the
     graph does, and a rerun is neither.
 
-    Driven with a bare rerun rather than by toggling a panel, because `AppTest`
-    exposes no way to open one — an expander is a plain block there with no
-    `.open` and no setter. The rerun is the mechanism under test; that an
-    expander triggers one is Streamlit's own documented behaviour, confirmed in
-    a browser against a 22-panel thread.
+    Driven with a bare rerun rather than by toggling a panel: the rerun is the
+    mechanism under test, and that an expander triggers one is Streamlit's own
+    documented behaviour, confirmed in a browser against a 22-panel thread.
     """
     at, fake = page(_interrupt())
     at.segmented_control[0].set_value("approve").run()

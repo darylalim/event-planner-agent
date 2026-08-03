@@ -16,7 +16,7 @@ what you need to *change code* safely.
 uv sync                                    # install (uv required; .python-version pins 3.14)
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 188 tests, ~4s, fully offline
+uv run pytest                              # 196 tests, ~5s, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -202,12 +202,29 @@ output is 37-61% of all transcript text: 70.8 KB on `full-brief-3`, whose larges
 result is 30.6 KB. `_render_tool` gates on `on_change="rerun"` plus `panel.open`, which
 makes opening a panel a full app rerun — still the cheaper side, since that rerun no longer
 carries the other bodies, and safe beside a pending approval because `review_token` does
-not move, so an in-progress decision is restored rather than cleared. **The key must be
-`tool_call_id`**: gating promotes the expander to a widget, widget keys must be unique, and
-an auto-generated key derives from the label — which repeats seven times on `full-brief-3`.
-A positional index will not do either, since `_render` is called from both the replay and
-mid-stream with no shared counter. `test_a_collapsed_tool_result_is_not_sent_to_the_browser`
-and `test_repeated_tool_names_get_distinct_panels` guard the two halves.
+not move, so an in-progress decision is restored rather than cleared.
+
+Three things follow, and each one bites silently. **The key must identify the message**:
+gating promotes the expander to a widget, widget keys must be unique, and an auto-generated
+key derives from the label — which repeats seven times on `full-brief-3`. A positional
+index will not do either, since `_render` is called from both the replay and mid-stream
+with no shared counter. **A repeated key is fatal, not cosmetic**: it raises, and an
+exception there takes the page down entirely — no transcript, no chat input, no approval
+panel for a booking still parked. `_panel_key` namespaces `tool_call_id` and `id`
+separately and returns `None` for anything already claimed in this run, so a duplicate
+degrades to an ungated panel. **Panels must be inert on any run that also streams a turn**:
+a widget toggle posts a rerun request, Streamlit raises `RerunException` at the next `st.*`
+call, and that subclasses `BaseException` — so the turn's `except Exception` misses it and
+`graph.stream` is abandoned. The transcript replays *before* the turn streams, so the
+replay takes `gated=not turn_pending`; this is the same rule as `submit_mode="disable"` on
+the chat box. Guarded by `test_a_collapsed_tool_result_is_not_sent_to_the_browser`,
+`test_repeated_tool_names_get_distinct_panels`, `test_an_opened_panel_renders_its_body`,
+`test_two_results_sharing_one_call_id_do_not_kill_the_page`, and
+`test_panels_are_inert_on_a_run_that_streams_a_turn`.
+
+The same gate is on the approval panel's "Middleware note", keyed on the action token —
+inside the fragment `rerun` reruns the fragment, and no turn is in flight to interrupt
+because the graph is parked waiting on that panel.
 
 **The approval panel is an `st.fragment`, so it must not read fresh graph state.**
 `_approval_panel` reruns in isolation on every widget change — that is the point, since
@@ -323,6 +340,11 @@ sorts `expandable` blocks by whether they carry an icon and routes those that do
 `icon=` — is reachable only through `at.status`. An assertion written against `at.expander`
 gets an empty list and fails for a reason that has nothing to do with the page;
 `_panels()` in `test_streamlit_page.py` exists to keep that in one place.
+
+Neither block exposes `.open`, which reads like "a test cannot open a panel" and is wrong —
+that was claimed here and in README once, and it hid a real coverage gap. A *gated* expander
+is a widget, so it registers its key in session state: `at.session_state[key] = True`
+followed by `at.run()` opens it. `_panel_keys()` collects those keys.
 
 Stub tools (`search_venues`, `check_availability`, `search_vendors`, `hold_venue`,
 `send_invitations`) are deterministic on purpose so a behaviour regression is visible rather

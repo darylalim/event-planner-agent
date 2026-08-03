@@ -161,8 +161,42 @@ def _render_ai(message: Any) -> None:
             st.caption(f":material/build: **{call['name']}** — {args}")
 
 
-def _render_tool(message: Any) -> None:
-    """Render a tool result, collapsed by default and computed only when opened.
+#: Panel keys already claimed in this script run. Streamlit re-execs the page on
+#: every rerun, so this resets with it — measured, not assumed. It has to be
+#: per-run because a duplicate key *raises*, and an exception here takes the
+#: whole page down: no transcript, no chat input, and no approval panel for a
+#: booking still parked behind one.
+_PANEL_KEYS: set[str] = set()
+
+
+def _panel_key(message: Any) -> str | None:
+    """A widget key unique to this tool result, or `None` if there isn't one.
+
+    Namespaced by source, because `tool_call_id` and `id` are separate id
+    spaces: flattened into one prefix, a value that appears in both collides.
+
+    A key already claimed in this run yields `None` rather than colliding. Two
+    `ToolMessage`s can carry one `tool_call_id` — a resumed node re-emitting, a
+    replay overlapping a mid-stream render — and rendering that unkeyed costs a
+    duplicated panel, while rendering it keyed costs the page.
+
+    Keyed on the message rather than its position because `_render` is called
+    from both the transcript replay and mid-stream, with no counter shared
+    between them; and not on the label, which repeats seven times over on the
+    recorded `full-brief-3` thread.
+    """
+    for prefix, attr in (("tc", "tool_call_id"), ("id", "id")):
+        if raw := getattr(message, attr, None):
+            key = f"tool-{prefix}-{raw}"
+            if key in _PANEL_KEYS:
+                return None
+            _PANEL_KEYS.add(key)
+            return key
+    return None
+
+
+def _render_tool(message: Any, *, gated: bool = True) -> None:
+    """Render a tool result, collapsed — and, when gated, computed only if opened.
 
     Tool output is long — a venue comparison or a budget breakdown runs to
     hundreds of lines — and the assistant's summary of it is the part worth
@@ -177,45 +211,45 @@ def _render_tool(message: Any) -> None:
     output is 37-61% of all transcript text: 70.8 KB of it on `full-brief-3`,
     whose largest single result is 30.6 KB.
 
-    What that costs is that opening a panel is now a full app rerun rather than
-    a client-side toggle. It is still the cheaper side of the trade, because
-    that rerun no longer carries the other panels' bodies. It is also safe next
-    to a pending approval: `turn_attempt` only advances on a turn and the
-    checkpoint id only advances when the graph does, so `review_token` is
-    unchanged and Streamlit restores an in-progress decision rather than
-    clearing it.
+    `gated=False` renders a plain block instead, and the caller passes it for
+    every message on a script run that will also stream a turn. A gated panel is
+    a *widget*: toggling one posts a rerun request, Streamlit services that at
+    the next `st.*` call — most of them are implicit yield points — by raising
+    `RerunException`, and that subclasses `BaseException`, so the turn's `except
+    Exception` does not catch it and `graph.stream` is abandoned mid-flight. The
+    page already refuses turn-interrupting input while a turn runs
+    (`submit_mode="disable"` on the chat box); a tool panel that quietly killed
+    a 672s planning turn would be a hole in the same rule.
 
-    The `key` is required rather than tidy. `on_change="rerun"` promotes the
-    expander to a stateful widget, and an auto-generated key derives from the
-    label — which repeats: `full-brief-3` holds seven `estimate_budget result`
-    panels and `full-brief-2` holds six `check_availability result`.
-    `tool_call_id` is required on a real `ToolMessage` and unique per call, so
-    it is stable across replays in a way a positional index is not — `_render`
-    is called both from the transcript replay and from mid-stream, with no
-    counter shared between them.
+    What gating costs where it does apply is that opening a panel becomes a full
+    app rerun rather than a client-side toggle: `graph.get_state` deserialises
+    the transcript again and the sidebar re-lists the store once per kind, all
+    against the same WAL database the CLI shares. Still the cheaper side, since
+    that rerun carries no other panel's body — and safe beside a parked
+    approval, because `turn_attempt` advances on a turn and the checkpoint id
+    advances when the graph does, so `review_token` holds still and an
+    in-progress decision is restored rather than cleared.
     """
     name = getattr(message, "name", None) or "tool"
-    label = f"{name} result"
-    token = getattr(message, "tool_call_id", None) or getattr(message, "id", None)
+    key = _panel_key(message) if gated else None
+    gate = {"key": key, "on_change": "rerun"} if key else {}
 
-    # Nothing stable to key on, so render eagerly rather than risk two panels
-    # colliding on one key — that raises, and takes the whole page with it.
-    panel = (
-        st.expander(label, icon=":material/output:", key=f"tool-{token}", on_change="rerun")
-        if token is not None
-        else st.expander(label, icon=":material/output:")
-    )
-    if token is None or panel.open:
+    panel = st.expander(f"{name} result", icon=":material/output:", **gate)
+    # `.open` is `None` on an ungated panel and `False` on a closed gated one,
+    # so this renders eagerly in exactly the cases that carry no gate.
+    if panel.open is not False:
         with panel:
             st.code(str(message.content), language="text", wrap_lines=True)
 
 
-def _render(message: Any) -> None:
+def _render(message: Any, *, gated: bool = True) -> None:
     """Render any message by kind. Shared by the history replay and the live turn.
 
     One function for both on purpose: rendering the live stream differently from
     the checkpointed history makes the page visibly rearrange itself on the next
-    rerun, which reads as a bug.
+    rerun, which reads as a bug. `gated` is the one thing that does differ, and
+    it changes no layout — only whether a tool panel is a widget. See
+    `_render_tool`.
     """
     kind = getattr(message, "type", None)
     if kind == "human":
@@ -224,7 +258,7 @@ def _render(message: Any) -> None:
     elif kind == "ai":
         _render_ai(message)
     elif kind == "tool":
-        _render_tool(message)
+        _render_tool(message, gated=gated)
 
 
 def _stream_turn(graph: Any, payload: Any, config: dict[str, Any], ctx: PlannerContext) -> None:
@@ -239,7 +273,10 @@ def _stream_turn(graph: Any, payload: Any, config: dict[str, Any], ctx: PlannerC
             if node == "__interrupt__" or not isinstance(update, dict):
                 continue
             for message in update.get("messages", []) or []:
-                _render(message)
+                # Inert: a widget rendered here could be toggled while this loop
+                # is still running, and the resulting `RerunException` would
+                # abandon the stream. See `_render_tool`.
+                _render(message, gated=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -319,8 +356,23 @@ def _approval_panel(
             # markdown mangles the braces. Kept rather than dropped because a
             # future `interrupt_on` config could put something meaningful here.
             if description := action.get("description"):
-                with st.expander("Middleware note", icon=":material/notes:"):
-                    st.code(str(description), language="text", wrap_lines=True)
+                # Gated like the tool panels, for the same reason and with the
+                # same rule: a closed expander still ships its body, and this one
+                # re-ships on every fragment rerun — every decision picked, every
+                # keystroke in the reason and edited-args boxes — for as long as
+                # the approval is parked. Keyed on the action's token, since two
+                # pending actions would otherwise collide on one key. `rerun`
+                # here reruns the fragment, not the app; no turn is in flight to
+                # interrupt, because the graph is parked waiting on this panel.
+                note = st.expander(
+                    "Middleware note",
+                    icon=":material/notes:",
+                    key=f"note-{token}",
+                    on_change="rerun",
+                )
+                if note.open:
+                    with note:
+                        st.code(str(description), language="text", wrap_lines=True)
 
             if unsupported := unsupported_decisions(allowed):
                 # Say so rather than silently narrowing the operator's options.
@@ -528,9 +580,15 @@ stored_slot = st.sidebar.container()
 # transcript — replayed from the checkpointer, not from session state
 # --------------------------------------------------------------------------- #
 
+# Peeked rather than popped — the pop stays below, after the transcript, so a
+# rerun arriving mid-turn cannot resubmit. All this decides is whether the
+# panels below are widgets: on a run that will also stream a turn they must not
+# be, since toggling one aborts that turn. See `_render_tool`.
+turn_pending = st.session_state.get("pending_input") is not None
+
 snapshot = graph.get_state(config)
 for message in (getattr(snapshot, "values", None) or {}).get("messages", []) or []:
-    _render(message)
+    _render(message, gated=not turn_pending)
 
 
 # --------------------------------------------------------------------------- #
