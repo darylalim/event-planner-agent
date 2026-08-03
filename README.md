@@ -25,26 +25,26 @@ Event planning hits nearly every condition the harness exists for:
 
 ## Setup
 
-Requires [uv](https://docs.astral.sh/uv/). Two separate Python versions are
-declared, and they do different jobs: `pyproject.toml` sets `>=3.11` as the
-compatibility floor, while `.python-version` pins *development* to 3.14 so every
-checkout builds the same environment. `uv sync` provisions the pinned
-interpreter automatically; change it with `uv python pin <version>`.
+Requires [uv](https://docs.astral.sh/uv/). Two Python versions are declared and
+they do different jobs: `pyproject.toml` sets `>=3.11` as the compatibility
+floor, while `.python-version` pins *development* to 3.14 so every checkout
+builds the same environment. `uv sync` provisions the pinned interpreter
+automatically; change it with `uv python pin <version>`.
 
 ```bash
 uv sync
 cp .env.example .env   # then fill in ANTHROPIC_API_KEY
 ```
 
-The browser UI's dependency is a `web` **extra** rather than a core one, so the
-CLI and the LangGraph Platform image — which never import Streamlit — do not
-carry it or its ~35 transitive packages. `uv sync` in a checkout still installs
-it, because the `dev` group asks for `event-planner-agent[web]`; a non-dev
-install that wants the page needs `uv sync --extra web`.
-
 `ANTHROPIC_API_KEY` is required. `TAVILY_API_KEY` is optional — without it,
-`web_search` degrades gracefully and tells the agent to rely on the structured
-directory and flag that reputation data went unchecked.
+`web_search` degrades gracefully, telling the agent to rely on the structured
+directory and to flag that reputation data went unchecked.
+
+The browser UI's dependency is a `web` **extra** rather than a core one, so the
+CLI and the LangGraph Platform image — neither of which imports Streamlit — do
+not carry it or its ~35 transitive packages. A checkout still gets it from
+`uv sync` alone, because the `dev` group asks for `event-planner-agent[web]`; a
+non-dev install that wants the page needs `uv sync --extra web`.
 
 ## Run
 
@@ -61,68 +61,9 @@ uv run pytest                                         # harness tests
 In the CLI: `/state` lists what is stored for the current user, `/export` writes
 their event files to `exports/`, and `/exit` quits.
 
-### Browser UI
-
-`streamlit_app.py` is the same graph, the same SQLite persistence, and the same
-approval gates behind a web front end. Thread, user id, and model are sidebar
-fields rather than flags; stored memories and event files are listed there too,
-as downloads. It reads the same `.env`, and shares `.state/planner.sqlite` with
-the CLI unless `EVENT_PLANNER_DB` points it elsewhere — so a plan started in the
-terminal resumes in the browser on the same thread.
-
-Two differences are deliberate rather than incidental:
-
-**The turn loop is inverted.** `cli._run_turn` blocks on `input()` until the
-operator decides. A Streamlit script cannot block — it runs top to bottom and
-ends, then reruns on the next interaction. So the transcript is replayed from the
-checkpointer on every rerun and the pending approval is re-derived from
-`StateSnapshot.interrupts`, rather than either being accumulated in session
-state. A second copy would drift from the graph the first time a turn failed
-halfway through; re-deriving also means a half-answered booking survives a
-browser refresh instead of being stranded.
-
-Replaying costs a full re-render on every rerun, which is why the approval gate
-is an `st.fragment`: picking a decision or editing arguments would otherwise
-replay an entire planning session — 15.7 KB of venue comparison in the recorded
-run — to redraw one segmented control. It is safe to isolate because the
-interrupt is already resolved into the panel's arguments and cannot change while
-the graph is parked waiting for an answer. Submitting escapes on purpose;
-`st.rerun()` defaults to `scope="app"`.
-
-Replaying is also why tool-result panels are lazy. Streamlit computes and sends
-a collapsed expander's body anyway, so every rerun was re-serialising every tool
-result in the thread — measured across the recorded threads in this repo, 37-61%
-of all transcript text, and 70.8 KB on the largest. `_render_tool` gates the body
-on `on_change="rerun"` and `panel.open`, keyed on `tool_call_id` because gating
-makes the panel a widget and a label-derived key collides seven ways on a thread
-holding seven `estimate_budget` calls.
-
-**Artifacts download rather than export.** `/export` in the CLI writes store keys
-to `exports/`, which is why it validates those agent-chosen keys against
-traversal. The browser has no reason to write to the server's disk, so it
-doesn't — and a second copy of that check is a second thing to get wrong.
-
-Approval is two steps: pick a decision, then submit. A single-click *Approve* is
-much easier to hit by accident than `a` + Enter is in a terminal, and `hold_venue`
-starts a deposit clock. `respond` is not offered, for the same reason it is absent
-from `ALLOWED_DECISIONS`; if config ever allows it, the UI says so rather than
-silently narrowing the operator's options.
-
-`.streamlit/config.toml` binds the server to `127.0.0.1`, since Streamlit's
-default is every interface and this page has no authentication — "User id" names
-a tenant, it does not prove one. That only holds when the app is launched from
-the repo root, because Streamlit resolves the file from the current working
-directory rather than from the script's; the page checks the effective
-`server.address` at startup and warns in the browser when it is not loopback,
-because a config file cannot enforce itself. The theme defines both light and
-dark so the mode toggle works; `primaryColor` was picked by measuring rather than
-by eye, since Streamlit puts white text on primary buttons and the primary button
-here is the one that commits money.
-
-Without `--user`, storage scopes to the conversation thread. That is
-deliberate — a shared placeholder id would merge every unidentified operator's
-memory into one bucket. Pass `--user <id>` for storage that carries across
-threads.
+Both front ends read the same `.env` and share `.state/planner.sqlite` unless
+`EVENT_PLANNER_DB` points elsewhere, so a plan started in the terminal resumes
+in the browser on the same thread.
 
 ## Architecture
 
@@ -147,12 +88,13 @@ lands on the shared root:
 | --- | --- | --- |
 | `/memories/` | `StoreBackend`, namespaced per user | Across sessions |
 | `/events/` | `StoreBackend`, namespaced per user | Across sessions |
-| everything else (`/skills/`) | `FilesystemBackend` rooted at `workspace/` | On disk, shared |
+| everything else | `FilesystemBackend` rooted at `workspace/` | On disk, shared |
 
-The filesystem backend is rooted at `workspace/`, **not** the repo root, and
-runs with `virtual_mode=True` — the agent cannot read or write its own source.
-Don't repoint `root_dir` at the repo, and don't use this backend in a server
-process handling untrusted input.
+Only `/skills/` currently lands on that shared root. The filesystem backend is
+rooted at `workspace/`, **not** the repo root, and runs with
+`virtual_mode=True` — the agent cannot read or write its own source. Those are
+path guardrails, not process isolation: don't repoint `root_dir` at the repo,
+and don't use this backend in a server process handling untrusted input.
 
 Event files are store-backed rather than on disk, so they aren't browsable by
 default. `/export` in the CLI writes the current user's files to `exports/`.
@@ -190,8 +132,9 @@ appended: `alice@example.com` becomes `alice@example_com-ff8d9819fc0e`.
 sends every unidentified caller down the *identified* branch and into one
 shared bucket, which is precisely the failure this rule exists to prevent
 (LangGraph builds the dataclass from `context={}`, so that is the common path).
-With no `user_id`, storage scopes to the conversation thread. `--user` likewise
-defaults to nothing rather than to a placeholder.
+With no `user_id`, storage scopes to the conversation thread, and `--user`
+likewise defaults to nothing. Pass `--user <id>` for storage that carries
+across threads.
 
 The one genuinely shared bucket is `("event_planner", <kind>, "unscoped")`,
 reached only when there is neither an id nor a resolvable thread. A
@@ -236,6 +179,59 @@ expect from `model → tools`:
 LangGraph's default `recursion_limit` of 25 therefore strands a session after
 roughly five tool calls. The CLI sets 200 instead; tune with `--max-steps`.
 
+### The browser front end
+
+`streamlit_app.py` is the same graph, the same persistence, and the same
+approval gates behind a web page. Thread, user id, and model are sidebar fields
+rather than flags, and stored memories and event files are listed there as
+downloads. Four differences from the CLI are deliberate rather than incidental.
+
+**The turn loop is inverted.** `cli._run_turn` blocks on `input()` until the
+operator decides; a Streamlit script cannot block — it runs top to bottom and
+ends, then reruns on the next interaction. So the transcript is replayed from
+the checkpointer on every rerun and the pending approval is re-derived from
+`StateSnapshot.interrupts`, rather than either being accumulated in session
+state. A second copy would drift from the graph the first time a turn failed
+halfway through; re-deriving also means a half-answered booking survives a
+browser refresh instead of being stranded.
+
+**Replaying is why two things are lazy.** The approval gate is an `st.fragment`,
+because picking a decision or editing arguments would otherwise replay an entire
+planning session — 15.7 KB of venue comparison in the recorded run — to redraw
+one segmented control. It is safe to isolate because the interrupt is already
+resolved into the panel's arguments and cannot change while the graph is parked;
+submitting escapes on purpose, since `st.rerun()` defaults to `scope="app"`.
+
+Tool-result panels are lazy for the same reason. Streamlit computes and ships a
+collapsed expander's body anyway, so every rerun was re-serialising every tool
+result in the thread — 37-61% of all transcript text across the recorded
+threads, and 70.8 KB on the largest. `_render_tool` gates the body on
+`on_change="rerun"` and `panel.open`, keyed on `tool_call_id`: gating promotes
+the panel to a widget, and a label-derived key collides seven ways on a thread
+holding seven `estimate_budget` calls.
+
+**Artifacts download rather than export.** `/export` in the CLI writes store
+keys to `exports/`, which is why it validates those agent-chosen keys against
+traversal. The browser has no reason to write to the server's disk, so it
+doesn't — and a second copy of that check is a second thing to get wrong.
+
+**Approval takes two steps**, pick then submit. A single-click *Approve* is much
+easier to hit by accident than `a` + Enter is in a terminal, and `hold_venue`
+starts a deposit clock. `respond` is not offered, for the same reason it is
+absent from `ALLOWED_DECISIONS`; if config ever allows it, the UI says so rather
+than silently narrowing the operator's options.
+
+One operational note. `.streamlit/config.toml` binds the server to `127.0.0.1`,
+since Streamlit's default is every interface and this page has no
+authentication — "User id" names a tenant, it does not prove one. That only
+holds when the app is launched from the repo root, because Streamlit resolves
+the file from the current working directory rather than from the script's, so
+the page checks the effective `server.address` at startup and warns in the
+browser when it is not loopback. A config file cannot enforce itself. The theme
+defines both light and dark so the mode toggle works; `primaryColor` was picked
+by measuring rather than by eye, since Streamlit puts white text on primary
+buttons and the primary button here is the one that commits money.
+
 ## What's real and what's stubbed
 
 | Component | Status |
@@ -252,19 +248,22 @@ backends.
 
 ## Verified live
 
-One full brief end-to-end against `claude-opus-5` (85 guests, SF, $45k ceiling,
-seated lunch + livestreamed presentation):
+The offline suite covers the harness and cannot cover model behaviour. These
+runs were made against `claude-opus-5` and their results recorded rather than
+assumed.
 
-| | |
+### One full brief, end to end
+
+85 guests, SF, $45k ceiling, seated lunch + livestreamed presentation:
+
+| Measure | Result |
 | --- | --- |
 | Wall clock | 672s |
 | Graph steps | 64 of the 200 budget |
 | Tool calls | `write_todos` ×3, `task` ×2, `estimate_budget` ×7, `write_file` ×3, `read_file` ×4, `ls` ×3 |
 | Tokens | 392,563 in (336,253 cached) / 16,943 out |
 | Cost | ~$0.87 |
-| Files produced | `brief.md`, `venues.md`, `vendors.md`, `budget.md` (~60KB) |
-
-Behaviours confirmed rather than assumed:
+| Files produced | `brief.md`, `venues.md`, `vendors.md`, `budget.md` (~60 KB) |
 
 - **Skills change behaviour.** For 85 seated guests it searched
   `min_capacity=180`, applying the venue-sourcing rule that seated format uses
@@ -281,127 +280,105 @@ Behaviours confirmed rather than assumed:
 - **It pushed back.** The brief said "Thursday 19 September 2026"; that date is
   a Saturday, and it flagged the mismatch and checked the real Thursday.
 
-### Approval gate, verified live
+### The approval gate
 
-All three resume paths were run against `claude-opus-5` on separate threads
-(~$0.25 total). This matters because offline tests cannot reach it: adaptive
-thinking is on by default, so a real `hold_venue` proposal arrives in an
-`AIMessage` carrying thinking blocks *alongside* the `tool_use`, and resuming
-replays that history to the API. A scripted `AIMessage` has no thinking blocks.
-
-Each run confirmed **1 signed thinking block** in the proposing turn, so the
-risky path was genuinely exercised rather than simulated:
+All three decisions were run from the CLI on separate threads (~$0.25 total),
+and `edit` again from the browser. This is the path offline tests cannot reach:
+adaptive thinking is on by default, so a real `hold_venue` proposal arrives in
+an `AIMessage` carrying thinking blocks *alongside* the `tool_use`, and resuming
+replays that history to the API — a scripted `AIMessage` has none. Every run
+confirmed **1 signed thinking block** in the proposing turn, so the risky path
+was genuinely exercised rather than simulated.
 
 | Decision | Result |
 | --- | --- |
-| `edit` | Operator's corrected args executed (60 → 45 guests), not the model's |
 | `approve` | Original args executed |
+| `edit` | Operator's corrected args executed (60 → 45 guests), not the model's |
 | `reject` | Stub never ran; the agent reported the refusal and did not retry |
 
-The `edit` run surfaced a nice property: the agent noticed the executed
-arguments differed from what it proposed and flagged the discrepancy in a
-comparison table rather than silently accepting the change.
+The `edit` runs surfaced a property worth keeping: the agent noticed that the
+executed arguments differed from what it proposed, and said so rather than
+silently accepting the change — a comparison table in the CLI, and in the
+browser (30 → 24 guests plus a corrected client name) an opening line of "the
+approval came back with two corrections I've absorbed" followed by a budget
+reworked at 24.
 
-### Browser UI, partially verified live
+`approve` and `reject` were not re-run from the browser. Both are recorded above
+for the CLI, and the browser's payloads are pinned against the CLI's by
+`test_reject_matches_the_cli_byte_for_byte` and `test_edit_matches_the_cli` —
+the decision dict is precisely what those compare.
 
-A brief driven through `streamlit_app.py` against `claude-opus-5` (40 guests,
-SF, $18k ceiling, seated lunch + 45-minute presentation), on thread `default`
-as `demo@example.com`. **It did not finish** — see the gap below.
+### The browser UI
 
-Confirmed:
+Driven through `streamlit_app.py` on several threads: a 40-guest brief ($18k
+ceiling) as `demo@example.com`, a 30-guest booking ($12k ceiling) on a separate
+thread and database, and a replay of the recorded `full-brief-3`.
 
 - **Streaming renders incrementally.** Tool calls appear as captions and results
   as collapsed expanders while the turn is still running.
-- **Skills load on demand.** Both `venue-sourcing` and `budget-modeling` were
-  read before any planning.
-- **Delegation works through the UI.** Two subagents ran: `venue-researcher`
-  wrote a 15.7 KB `venues.md`, `vendor-researcher` wrote `vendors.md`.
-- **Storage routes per user.** Event files landed under
-  `event_planner/events/u/demo@example_com-7462108984f6`.
-- **Isolation is visible in the product.** `acme-planner`'s `/AGENTS.md` sits in
-  the same database and the sidebar correctly reported "no memories yet" for
-  `demo@example.com`.
+- **Skills load on demand, and delegation works through the page.** Both
+  `venue-sourcing` and `budget-modeling` were read before any planning;
+  `venue-researcher` wrote a 15.7 KB `venues.md` and `vendor-researcher` wrote
+  `vendors.md`.
+- **Storage routes per user, visibly.** Event files landed under
+  `event_planner/events/u/demo@example_com-7462108984f6`, and with
+  `acme-planner`'s `/AGENTS.md` sitting in the same database the sidebar
+  correctly reported "no memories yet" for `demo@example.com`.
 - **The transcript survives losing the server.** The host reaped the background
-  process mid-turn (twice, at ~10 minutes), and a fresh process replayed the
-  whole transcript from the checkpointer — the payoff for reading history from
+  process mid-turn, twice, and a fresh process replayed the whole transcript
+  from the checkpointer — the payoff for reading history from
   `graph.get_state()` rather than accumulating it in session state.
-- **A stranded turn can be picked up.** Being killed mid-`task` left the thread
-  at `next=('tools',)` with no interrupt to answer. Streaming `None` continued
-  the pending node and the vendor-researcher ran to completion.
+- **The fragment isolates.** Selecting `edit` and editing the arguments redrew
+  only the panel, leaving the transcript untouched; submitting escaped to a full
+  app run.
+- **Panels are genuinely lazy.** Replaying `full-brief-3` rendered 22 panels,
+  **0** code blocks in the DOM, and 74.1 KB of markup for a transcript whose
+  tool output alone is 70.8 KB — the bodies are absent, not merely hidden.
+  Opening one produced a single code block with the budget breakdown, and the
+  other six `estimate_budget result` panels stayed shut, which is what per-panel
+  widget identity buys.
 
-That last one was a **gap this run found**: the page originally had no
-affordance for a turn stranded with `next` set and nothing to approve, so the
-thread would have sat on an unfinished tool call for good. Fixed, with tests.
+Two bugs were found this way, both since fixed and covered by tests.
 
-**Since run live:** the `hold_venue` proposal and the approval gate in the
-browser, on a separate thread and database (30 guests, SF, $12k ceiling,
-standing reception). The `edit` decision was exercised end to end — headcount 30
-→ 24 and a corrected client name — and the agent absorbed both, opening its next
-turn with "the approval came back with two corrections I've absorbed" and
-reworking the budget at 24 guests. That closes the gap recorded here: the browser
-reaches the resume through the same call as the CLI, and the proposing
-`AIMessage` carried thinking blocks that were replayed on resume.
+**A turn could be stranded.** The reaping above also left a thread at
+`next=('tools',)` with no interrupt to answer, and the page had no affordance
+for that state — so that brief never finished, and the thread would have sat on
+an unfinished tool call for good. Streaming `None` continues the pending node;
+the vendor-researcher then ran to completion.
 
-It also confirmed the fragment: selecting `edit` and editing the arguments
-redrew only the panel, leaving the transcript above untouched, and submitting
-escaped to a full app run.
+**`st.markdown` reads `$...$` as LaTeX.** Any line quoting two costs had the
+span between them swallowed and re-set as italic mathematics: "$10,281 — $1,719
+under your $12,000 ceiling" rendered as an equation, taking the figures an
+operator is asked to check with it. Every amount in the proposal was affected.
+Fixed by escaping bare `$` before rendering (`webui.markdown_safe`), with the
+live strings pinned as tests.
 
-**Lazy tool-result panels, verified live.** The `full-brief-3` thread replayed in
-a browser: 22 panels rendered, **0** code blocks in the DOM, and 74.1 KB of
-markup for a transcript whose tool output alone is 70.8 KB — so the bodies are
-genuinely absent rather than merely hidden. Opening one panel took the DOM to a
-single code block and the budget breakdown appeared. The other six
-`estimate_budget result` panels stayed shut, which is what per-panel widget
-identity buys: with a label-derived key all seven share one key, and they would
-have opened together.
+### What the suite reaches, and what it can't
 
-The suite reaches this too, contrary to a claim recorded here earlier. A gated
-expander is a widget, so it registers its key in session state, and setting that
-key opens the panel under `AppTest` — `test_an_opened_panel_renders_its_body`
-and `test_opening_one_panel_leaves_the_others_closed` drive exactly the two
-behaviours the browser run showed. What the browser added was scale and the DOM
-measurement, not the only possible coverage.
+Most of the browser's approval path is covered offline, because the middleware
+builds the interrupt rather than the model — so a *scripted* model is enough to
+produce a genuine one. `test_the_real_middleware_payload_parses` drives the real
+graph to a real interrupt and feeds the actual `snapshot.interrupts` to the
+page's parser. It found two things the hand-written fixtures had wrong:
+`review_configs` entries also carry `action_name`, and `description` is
+generated boilerplate repeating the tool name and a dict repr of the args, which
+the page had been rendering as prose directly under those same arguments. The
+resume itself needs no separate coverage: the page calls
+`graph.stream(Command(resume=...))` on the same graph with the same config and
+adds nothing to it.
 
-`approve` and `reject` were not re-run from the browser. Both are recorded as
-verified for the CLI above, and `test_reject_matches_the_cli_byte_for_byte` /
-`test_edit_matches_the_cli` pin the browser's payloads against the CLI's, so what
-would differ is the decision dict — which is exactly what those tests compare.
-
-**The run found a rendering bug.** `st.markdown` reads `$...$` as LaTeX, so any
-line quoting two costs had the span between them swallowed and re-set as italic
-mathematics: "$10,281 — $1,719 under your $12,000 ceiling" rendered as an
-equation, taking the figures an operator is asked to check with it. Every
-amount in the proposal was affected. Fixed by escaping bare `$` before rendering
-(`webui.markdown_safe`), with the live strings pinned as tests.
-
-Before that run, most of the gap had already been closed offline:
-
-- **The payload shape is pinned against the package rather than a fixture.**
-  The middleware builds the interrupt, not the model, so a *scripted* model is
-  enough to produce a genuine one: `test_the_real_middleware_payload_parses`
-  drives the real graph to a real interrupt and feeds the actual
-  `snapshot.interrupts` to the page's parser. It found two things the
-  hand-written fixtures had wrong — `review_configs` entries also carry
-  `action_name`, and `description` is generated boilerplate repeating the tool
-  name and a dict repr of the args, which the page had been rendering as
-  markdown prose directly under the same arguments.
-- **The decisions are byte-identical to the CLI's**, pinned by
-  `test_reject_matches_the_cli_byte_for_byte` and `test_edit_matches_the_cli`.
-- **The resume path is the CLI's.** The page calls
-  `graph.stream(Command(resume=...))` on the same graph with the same config and
-  adds nothing to it, and the CLI's version is recorded as verified above.
-
-What that could not reach was the model-dependent part: a real proposing
-`AIMessage` carries signed thinking blocks, and resuming replays them to the API.
-The `edit` run above exercised it from the browser, which is what turned this
-from an argument into a result — and it is also what surfaced the `$`-as-LaTeX
-bug, which no offline test would have caught because a scripted model does not
-write costed prose.
+Opening a panel is reachable too, contrary to a claim recorded here once. A
+gated expander is a widget, so it registers its key in session state, and
+setting that key opens it under `AppTest` —
+`test_an_opened_panel_renders_its_body` and
+`test_opening_one_panel_leaves_the_others_closed` drive the two behaviours the
+browser run showed. What the browser added was scale and the DOM measurement,
+not the only possible coverage.
 
 What remains genuinely unreachable offline is the fragment's own execution mode.
 `AppTest` builds a fresh `LocalScriptRunner` per call and never sets
 `fragment_id_queue`, so `_approval_panel` only ever runs inline there; the
-browser's replay from `MemoryFragmentStorage` is covered by the live run above
+browser's replay from `MemoryFragmentStorage` is covered by the live runs above
 and not by the suite. The invariant that makes the isolation safe — that the
 panel reads no graph state while rendering — is pinned by
 `test_the_panel_reads_no_graph_state_while_rendering`.
@@ -447,3 +424,7 @@ tests/
   test_streamlit_page.py the real page driven through Streamlit's AppTest
   test_tools.py          tool correctness — dates, budgets, booking refusals
 ```
+
+## License
+
+[MIT](LICENSE).
