@@ -1,9 +1,14 @@
 [project]
 name = "event-planner-agent"
 version = "0.1.0"
-description = "Event planning agent on Deep Agents"
+description = "Event planning agent on Deep Agents for driving an event brief to a bookable plan."
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
+# PEP 639: an SPDX expression plus the file to ship in the wheel's metadata.
+# Needs hatchling >= 1.27, which `[build-system]` gets by leaving the version
+# open. Do not also add a `License ::` classifier — the two forms conflict.
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "deepagents>=0.7.1",
     "langchain-anthropic>=1.5.3",
