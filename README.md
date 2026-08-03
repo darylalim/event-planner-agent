@@ -89,6 +89,14 @@ interrupt is already resolved into the panel's arguments and cannot change while
 the graph is parked waiting for an answer. Submitting escapes on purpose;
 `st.rerun()` defaults to `scope="app"`.
 
+Replaying is also why tool-result panels are lazy. Streamlit computes and sends
+a collapsed expander's body anyway, so every rerun was re-serialising every tool
+result in the thread — measured across the recorded threads in this repo, 37-61%
+of all transcript text, and 70.8 KB on the largest. `_render_tool` gates the body
+on `on_change="rerun"` and `panel.open`, keyed on `tool_call_id` because gating
+makes the panel a widget and a label-derived key collides seven ways on a thread
+holding seven `estimate_budget` calls.
+
 **Artifacts download rather than export.** `/export` in the CLI writes store keys
 to `exports/`, which is why it validates those agent-chosen keys against
 traversal. The browser has no reason to write to the server's disk, so it
@@ -337,6 +345,16 @@ reaches the resume through the same call as the CLI, and the proposing
 It also confirmed the fragment: selecting `edit` and editing the arguments
 redrew only the panel, leaving the transcript above untouched, and submitting
 escaped to a full app run.
+
+**Lazy tool-result panels, verified live.** The `full-brief-3` thread replayed in
+a browser: 22 panels rendered, **0** code blocks in the DOM, and 74.1 KB of
+markup for a transcript whose tool output alone is 70.8 KB — so the bodies are
+genuinely absent rather than merely hidden. Opening one panel took the DOM to a
+single code block and the budget breakdown appeared. The other six
+`estimate_budget result` panels stayed shut, which is what per-panel widget
+identity buys: with a label-derived key all seven share one key, and they would
+have opened together. Only the toggle needed a browser — `AppTest` exposes no
+`.open` on an expander — so it is the one part of this the suite cannot reach.
 
 `approve` and `reject` were not re-run from the browser. Both are recorded as
 verified for the CLI above, and `test_reject_matches_the_cli_byte_for_byte` /

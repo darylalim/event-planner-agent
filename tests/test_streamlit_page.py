@@ -179,6 +179,83 @@ def test_a_typed_brief_reaches_the_graph(page):
 
 
 # --------------------------------------------------------------------------- #
+# tool results are not shipped while collapsed
+# --------------------------------------------------------------------------- #
+
+
+def _tool(name, content, tool_call_id="call-1"):
+    """A tool result shaped like a real `ToolMessage`.
+
+    `tool_call_id` is a required field on the real class, which is why the page
+    keys its panel on it. Set here rather than left off so the fixture cannot
+    quietly exercise the page's no-identity fallback instead of its main path.
+    """
+    return SimpleNamespace(type="tool", name=name, content=content, tool_call_id=tool_call_id)
+
+
+def _panels(at):
+    """The tool-result expanders.
+
+    Read through `at.status`, not `at.expander`: `element_tree` sorts an
+    `expandable` block by whether it carries an icon, and routes the ones that
+    do to `Status`. These pass `icon=":material/output:"`, so `at.expander` is
+    empty and an assertion written against it fails for a reason that has
+    nothing to do with the page.
+    """
+    return [s for s in at.status if s.label.endswith(" result")]
+
+
+def test_a_collapsed_tool_result_is_not_sent_to_the_browser(page):
+    """Streamlit computes a closed expander's body unless `on_change` gates it.
+
+    This page replays the whole checkpointed transcript on every rerun, so an
+    ungated body is re-serialised on every keystroke in the sidebar. Measured on
+    the repo's recorded threads, tool output is 37-61% of transcript text — 70.8
+    KB on `full-brief-3`. The panel still renders; only its contents wait.
+    """
+    at, _ = page(messages=[_tool("search_venues", "MISSION LOFT " * 500)])
+
+    assert not at.exception
+    assert [s.label for s in _panels(at)] == ["search_venues result"]
+    # Not merely hidden — absent from the rendered tree, so it never crosses
+    # the wire. This is the whole point of the gate.
+    assert not any("MISSION LOFT" in c.value for c in at.code)
+
+
+def test_repeated_tool_names_get_distinct_panels(page):
+    """Gating promotes the expander to a widget, and widget keys must be unique.
+
+    An auto-generated key derives from the label, and labels repeat: the recorded
+    `full-brief-3` thread holds seven `estimate_budget result` panels and
+    `full-brief-2` holds six `check_availability result`. Keying on the label
+    alone raises a duplicate-key error, which takes the entire page down rather
+    than one panel — so this asserts on a thread shaped like the real one.
+    """
+    at, _ = page(messages=[_tool("estimate_budget", f"total {i}", f"call-{i}") for i in range(7)])
+
+    assert not at.exception
+    assert [s.label for s in _panels(at)] == ["estimate_budget result"] * 7
+
+
+def test_a_tool_result_with_no_identity_still_renders(page):
+    """Without a stable key the page must degrade, not raise.
+
+    A real `ToolMessage` always carries `tool_call_id`, but `_render` takes
+    `Any`. Two unkeyed panels are harmless; two panels sharing one key are not,
+    so the fallback drops the gate rather than inventing an identity.
+    """
+    at, _ = page(
+        messages=[
+            SimpleNamespace(type="tool", name="ls", content="brief.md"),
+            SimpleNamespace(type="tool", name="ls", content="venues.md"),
+        ]
+    )
+
+    assert not at.exception
+    assert [c.value for c in at.code] == ["brief.md", "venues.md"]
+
+
+# --------------------------------------------------------------------------- #
 # the approval gate
 # --------------------------------------------------------------------------- #
 
@@ -354,6 +431,34 @@ def test_an_approval_answered_elsewhere_is_not_resubmitted(page):
     assert any("already been answered" in w.value for w in at.warning)
     # And the page has moved on rather than re-offering a decision on it.
     assert len(at.chat_input) == 1
+
+
+def test_a_full_rerun_while_parked_keeps_an_in_progress_decision(page):
+    """Opening a tool-result panel is a full app rerun; it must not cost a decision.
+
+    `_render_tool` gates its body on `on_change="rerun"`, which escapes to
+    `scope="app"`. So an operator who opens a budget breakdown to check it
+    against a pending `hold_venue` — exactly what the panel's own caption tells
+    them to do — reruns the whole page underneath the approval panel. That is
+    only safe because `review_token` does not move while the graph is parked:
+    `turn_attempt` advances on a turn and the checkpoint id advances when the
+    graph does, and a rerun is neither.
+
+    Driven with a bare rerun rather than by toggling a panel, because `AppTest`
+    exposes no way to open one — an expander is a plain block there with no
+    `.open` and no setter. The rerun is the mechanism under test; that an
+    expander triggers one is Streamlit's own documented behaviour, confirmed in
+    a browser against a 22-panel thread.
+    """
+    at, fake = page(_interrupt())
+    at.segmented_control[0].set_value("approve").run()
+    assert not at.button[0].disabled
+
+    at.run()  # what an expander toggle does to the rest of the page
+
+    assert at.segmented_control[0].value == "approve"
+    assert not at.button[0].disabled
+    assert fake.sent == []
 
 
 def test_the_panel_reads_no_graph_state_while_rendering(page):

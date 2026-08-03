@@ -194,6 +194,21 @@ own message on both the replay and the echo, and the tool-call captions). Adding
 `st.markdown`/`st.caption` that carries model or operator text needs it too; `st.code` and
 `st.json` do not, since neither parses markdown.
 
+**A collapsed `st.expander` still computes and ships its body.** Closed is a frontend
+state, not a guard — and since the page replays the whole checkpointed transcript on every
+rerun, an ungated tool-result panel re-serialises every result in the thread on every
+sidebar keystroke. Measured across the recorded threads in `.state/planner.sqlite`, tool
+output is 37-61% of all transcript text: 70.8 KB on `full-brief-3`, whose largest single
+result is 30.6 KB. `_render_tool` gates on `on_change="rerun"` plus `panel.open`, which
+makes opening a panel a full app rerun — still the cheaper side, since that rerun no longer
+carries the other bodies, and safe beside a pending approval because `review_token` does
+not move, so an in-progress decision is restored rather than cleared. **The key must be
+`tool_call_id`**: gating promotes the expander to a widget, widget keys must be unique, and
+an auto-generated key derives from the label — which repeats seven times on `full-brief-3`.
+A positional index will not do either, since `_render` is called from both the replay and
+mid-stream with no shared counter. `test_a_collapsed_tool_result_is_not_sent_to_the_browser`
+and `test_repeated_tool_names_get_distinct_panels` guard the two halves.
+
 **The approval panel is an `st.fragment`, so it must not read fresh graph state.**
 `_approval_panel` reruns in isolation on every widget change — that is the point, since
 the alternative replays the whole checkpointed transcript to redraw one segmented
@@ -301,6 +316,13 @@ is required, since the page caches the graph across reruns by design. `ANTHROPIC
 is set to a dummy value only to clear the credential gate — no model is built and nothing
 leaves the process. Prefer this over asserting on rendering helpers: the bugs live in the
 wiring, and the disabled-button bug above was invisible to every unit-level test.
+
+One `AppTest` trap: **an expander with an `icon` is not in `at.expander`.** `element_tree`
+sorts `expandable` blocks by whether they carry an icon and routes those that do to
+`Status`, so every panel this page renders — tool results and the middleware note both pass
+`icon=` — is reachable only through `at.status`. An assertion written against `at.expander`
+gets an empty list and fails for a reason that has nothing to do with the page;
+`_panels()` in `test_streamlit_page.py` exists to keep that in one place.
 
 Stub tools (`search_venues`, `check_availability`, `search_vendors`, `hold_venue`,
 `send_invitations`) are deterministic on purpose so a behaviour regression is visible rather

@@ -162,16 +162,52 @@ def _render_ai(message: Any) -> None:
 
 
 def _render_tool(message: Any) -> None:
-    """Render a tool result, collapsed by default.
+    """Render a tool result, collapsed by default and computed only when opened.
 
     Tool output is long — a venue comparison or a budget breakdown runs to
     hundreds of lines — and the assistant's summary of it is the part worth
-    reading. `expanded=False` keeps the transcript legible with the detail one
-    click away.
+    reading. Collapsing keeps the transcript legible with the detail one click
+    away.
+
+    `on_change="rerun"` is what makes "collapsed" mean *not sent*. Streamlit
+    computes and ships an expander's whole body even while it is closed, and
+    this page replays the entire checkpointed transcript on every rerun — so
+    without the gate, every keystroke in the sidebar re-serialises every tool
+    result in the thread. Measured across this repo's own recorded threads, tool
+    output is 37-61% of all transcript text: 70.8 KB of it on `full-brief-3`,
+    whose largest single result is 30.6 KB.
+
+    What that costs is that opening a panel is now a full app rerun rather than
+    a client-side toggle. It is still the cheaper side of the trade, because
+    that rerun no longer carries the other panels' bodies. It is also safe next
+    to a pending approval: `turn_attempt` only advances on a turn and the
+    checkpoint id only advances when the graph does, so `review_token` is
+    unchanged and Streamlit restores an in-progress decision rather than
+    clearing it.
+
+    The `key` is required rather than tidy. `on_change="rerun"` promotes the
+    expander to a stateful widget, and an auto-generated key derives from the
+    label — which repeats: `full-brief-3` holds seven `estimate_budget result`
+    panels and `full-brief-2` holds six `check_availability result`.
+    `tool_call_id` is required on a real `ToolMessage` and unique per call, so
+    it is stable across replays in a way a positional index is not — `_render`
+    is called both from the transcript replay and from mid-stream, with no
+    counter shared between them.
     """
     name = getattr(message, "name", None) or "tool"
-    with st.expander(f"{name} result", icon=":material/output:"):
-        st.code(str(message.content), language="text", wrap_lines=True)
+    label = f"{name} result"
+    token = getattr(message, "tool_call_id", None) or getattr(message, "id", None)
+
+    # Nothing stable to key on, so render eagerly rather than risk two panels
+    # colliding on one key — that raises, and takes the whole page with it.
+    panel = (
+        st.expander(label, icon=":material/output:", key=f"tool-{token}", on_change="rerun")
+        if token is not None
+        else st.expander(label, icon=":material/output:")
+    )
+    if token is None or panel.open:
+        with panel:
+            st.code(str(message.content), language="text", wrap_lines=True)
 
 
 def _render(message: Any) -> None:
