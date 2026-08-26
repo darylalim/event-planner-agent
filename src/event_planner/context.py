@@ -44,8 +44,8 @@ _SEPARATOR = "-"
 _MAX_READABLE = 40
 _DIGEST_LEN = 12
 
-#: Root label for every namespace. The kind ("memories"/"events") is appended
-#: by `_scope`, so it must not be baked in here.
+#: Root label for every namespace. The kind ("memories"/"events"/"artifacts")
+#: is appended by `_scope`, so it must not be baked in here.
 _ROOT = ("event_planner",)
 
 
@@ -145,3 +145,23 @@ def events_namespace(runtime: Any) -> tuple[str, ...]:
     grep over it, so one planner could read another's brief.
     """
     return _scope(runtime, "events")
+
+
+def artifacts_namespace(runtime: Any) -> tuple[str, ...]:
+    """Namespace for the harness's own spill (`/large_tool_results/`, `/conversation_history/`).
+
+    These are deepagents' paths, not ours, which is why they are easy to miss.
+    `FilesystemMiddleware` derives both from the composite's `artifacts_root`
+    (`/` by default) and writes to them on its own: a tool result above
+    `tool_token_limit_before_evict` is offloaded to
+    `/large_tool_results/<tool_call_id>`, and evicted turns above
+    `human_message_token_limit_before_evict` to
+    `/conversation_history/<uuid>.md`. Unrouted, both land on the shared root —
+    carrying whatever the tool returned, which here is a named client's venue
+    shortlist or budget.
+
+    Scoped apart from `events_namespace` rather than folded into it, so
+    `cli._export` keeps emitting the planner's own files and not the
+    harness's overflow.
+    """
+    return _scope(runtime, "artifacts")

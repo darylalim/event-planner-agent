@@ -88,7 +88,14 @@ lands on the shared root:
 | --- | --- | --- |
 | `/memories/` | `StoreBackend`, namespaced per user | Across sessions |
 | `/events/` | `StoreBackend`, namespaced per user | Across sessions |
+| `/large_tool_results/` | `StoreBackend`, namespaced per user | Across sessions |
+| `/conversation_history/` | `StoreBackend`, namespaced per user | Across sessions |
 | everything else | `FilesystemBackend` rooted at `workspace/` | On disk, shared |
+
+The last two are deepagents' own paths. `FilesystemMiddleware` offloads a tool result over
+20k tokens, or an evicted turn over 50k, without anything here naming them — and what spills
+is the tool's output, which in this domain is a named client's shortlist or budget. Routing
+them is the same rule as `/events/`, applied to a path the harness writes rather than we do.
 
 Only `/skills/` currently lands on that shared root. The filesystem backend is
 rooted at `workspace/`, **not** the repo root, and runs with
@@ -176,8 +183,12 @@ expect from `model → tools`:
 = 10 steps for one tool call and a final answer
 ```
 
-LangGraph's default `recursion_limit` of 25 therefore strands a session after
-roughly five tool calls. The CLI sets 200 instead; tune with `--max-steps`.
+LangGraph's default `recursion_limit` of 25 would strand a session after
+roughly five tool calls — but it never applies here, because
+`create_deep_agent` binds `recursion_limit: 9_999` onto the compiled graph. So
+the 200 both front ends pass is a deliberate cap on a runaway session, not a
+rescue from 25: removing it uncaps to 9999 rather than restoring the default.
+Tune with `--max-steps`.
 
 ### The browser front end
 

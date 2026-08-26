@@ -42,7 +42,12 @@ from deepagents.backends import CompositeBackend, FilesystemBackend, StoreBacken
 from langchain.agents.middleware import TodoListMiddleware
 from langgraph.store.base import BaseStore
 
-from event_planner.context import PlannerContext, events_namespace, memory_namespace
+from event_planner.context import (
+    PlannerContext,
+    artifacts_namespace,
+    events_namespace,
+    memory_namespace,
+)
 from event_planner.prompts import ORCHESTRATOR_PROMPT
 from event_planner.subagents import SUBAGENTS
 from event_planner.tools import (
@@ -101,6 +106,14 @@ def build_backend() -> CompositeBackend:
     guest details, and budgets — leaving them on a shared root lets one
     planner's session read another's brief.
 
+    `/large_tool_results/` and `/conversation_history/` are routed for the same
+    reason, and are easier to miss because nothing here writes them:
+    `FilesystemMiddleware` derives both from the composite's `artifacts_root`
+    and offloads to them on its own once a tool result or an evicted turn goes
+    over its token limit. What spills is the tool's own output — a named
+    client's venue shortlist or budget — so left unrouted they would put
+    exactly the data `/events/` is routed to protect back on the shared root.
+
     No directories are created here. `workspace/memories` used to be made on
     disk and then permanently shadowed by the `/memories/` route, so it showed
     up twice in the agent's root listing and anything written to the on-disk
@@ -111,6 +124,8 @@ def build_backend() -> CompositeBackend:
         routes={
             "/memories/": StoreBackend(namespace=memory_namespace),
             "/events/": StoreBackend(namespace=events_namespace),
+            "/large_tool_results/": StoreBackend(namespace=artifacts_namespace),
+            "/conversation_history/": StoreBackend(namespace=artifacts_namespace),
         },
     )
 

@@ -17,7 +17,12 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from event_planner.agent import WORKSPACE, build_backend
 from event_planner.cli import STATE_DIR, _check_db_outside_workspace
-from event_planner.context import PlannerContext, events_namespace, memory_namespace
+from event_planner.context import (
+    PlannerContext,
+    artifacts_namespace,
+    events_namespace,
+    memory_namespace,
+)
 
 
 class _Runtime:
@@ -271,18 +276,86 @@ def test_events_and_memories_do_not_share_a_namespace():
 
 
 def test_user_data_paths_are_routed_to_per_user_stores():
-    """`/events/` and `/memories/` must not resolve to the shared filesystem.
+    """No path carrying user data may resolve to the shared filesystem.
 
     The shared root is a single static path — backend factories were removed in
     deepagents 0.7 — and the agent has ls/read/glob/grep over it, so anything
     left there is readable by every session.
+
+    The last two are deepagents' own paths rather than ours, which is why they
+    were missed: `FilesystemMiddleware` offloads to them on its own once a tool
+    result or an evicted turn crosses a token limit, so nothing in this repo
+    names them at a call site.
     """
     from deepagents.backends import StoreBackend
 
     routes = build_backend().routes
-    for path in ("/events/", "/memories/"):
+    for path in (
+        "/events/",
+        "/memories/",
+        "/large_tool_results/",
+        "/conversation_history/",
+    ):
         assert path in routes, f"{path} falls through to the shared filesystem"
         assert isinstance(routes[path], StoreBackend), f"{path} is not store-backed"
+
+
+def test_offloaded_tool_results_do_not_land_on_the_shared_root():
+    """Membership in `routes` is not proof that a nested write follows it.
+
+    The composite matches longest prefix first and the real offload path is
+    `/large_tool_results/<tool_call_id>`, a level below the route. So drive a
+    real write through the real graph and check both ends: it reached the
+    caller's own store namespace, and the shared disk root did not change.
+    """
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.store.memory import InMemoryStore
+
+    from event_planner.agent import build_agent
+
+    store = InMemoryStore()
+    before = {p.name for p in WORKSPACE.iterdir()}
+    model = _ScriptedWriter(
+        [
+            AIMessage(
+                content="Offloading.",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "args": {
+                            "file_path": "/large_tool_results/tc_abc123",
+                            "content": "Acme offsite — 85 guests, $45k ceiling.",
+                        },
+                        "id": "spill-1",
+                    }
+                ],
+            ),
+            AIMessage(content="Done."),
+        ]
+    )
+    graph = build_agent(model=model, checkpointer=InMemorySaver(), store=store)
+    result = graph.invoke(
+        {"messages": [{"role": "user", "content": "go"}]},
+        config={"configurable": {"thread_id": "spill-thread"}},
+        context=PlannerContext(user_id="alice@example.com"),
+    )
+
+    tool_msgs = [m for m in result["messages"] if getattr(m, "name", None) == "write_file"]
+    assert tool_msgs, "write_file never ran"
+    assert "error" not in str(tool_msgs[-1].content).lower(), tool_msgs[-1].content
+
+    who = _Runtime(PlannerContext(user_id="alice@example.com"))
+    assert list(store.search(artifacts_namespace(who))), "offload missed the per-user store"
+    assert {p.name for p in WORKSPACE.iterdir()} == before, "offload reached the shared root"
+
+
+def test_offloads_are_isolated_per_user_and_kept_out_of_events():
+    """Separate from `/events/` so `cli._export` emits files, not harness spill."""
+    alice = _Runtime(PlannerContext(user_id="alice@example.com"))
+    bob = _Runtime(PlannerContext(user_id="bob@example.com"))
+    assert artifacts_namespace(alice) != artifacts_namespace(bob)
+    assert artifacts_namespace(alice) != events_namespace(alice)
+    assert artifacts_namespace(alice) != memory_namespace(alice)
 
 
 def test_shared_filesystem_root_holds_only_reference_material():

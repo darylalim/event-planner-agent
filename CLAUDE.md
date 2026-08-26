@@ -16,7 +16,7 @@ what you need to *change code* safely.
 uv sync                                    # install (uv required; .python-version pins 3.14)
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 196 tests, ~5s, fully offline
+uv run pytest                              # 198 tests, ~5s, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -118,7 +118,18 @@ is the **default**, not a route:
 | --- | --- | --- |
 | `/memories/` | `StoreBackend(namespace=memory_namespace)` | Per user, across sessions |
 | `/events/` | `StoreBackend(namespace=events_namespace)` | Per user, across sessions |
+| `/large_tool_results/` | `StoreBackend(namespace=artifacts_namespace)` | Per user, across sessions |
+| `/conversation_history/` | `StoreBackend(namespace=artifacts_namespace)` | Per user, across sessions |
 | everything else | `FilesystemBackend(root_dir=workspace/, virtual_mode=True)` | **Shared across all sessions** |
+
+The last two are deepagents' paths, not ours, and nothing in this repo names them at a call
+site: `FilesystemMiddleware` derives both from the composite's `artifacts_root` and offloads
+to them itself once a tool result passes `tool_token_limit_before_evict` (20k tokens) or an
+evicted turn passes `human_message_token_limit_before_evict` (50k). What spills is the tool's
+own output — a named client's venue shortlist or budget — so unrouted they put exactly the
+data `/events/` exists to protect back on the shared root. They are scoped apart from
+`/events/` so `cli._export` keeps emitting the planner's files rather than the harness's
+overflow.
 
 The agent has `ls`/`read_file`/`glob`/`grep` over that filesystem root, and the root is a
 single static path — backend factories were removed in deepagents 0.7, so it cannot vary
@@ -303,8 +314,10 @@ validates against traversal before writing to `exports/`.
 
 **The step budget is `6 + 4N` for N tool round trips.** Five middleware nodes run per model
 turn (three `before_agent`, two `after_model`), and LangGraph counts each as a super-step.
-Its default `recursion_limit` of 25 strands a session after ~5 tool calls; the CLI sets 200.
-Adding middleware changes this constant — `test_step_budget_survives_a_long_planning_session`
+LangGraph's own default of 25 never applies: `create_deep_agent` binds
+`recursion_limit: 9_999` onto the compiled graph, so the front ends' `DEFAULT_MAX_STEPS = 200`
+*lowers* that ceiling rather than raising it from 25. Dropping the explicit limit uncaps a
+runaway session to 9999, it does not strand one at 25. Adding middleware changes this constant — `test_step_budget_survives_a_long_planning_session`
 guards it.
 
 ## deepagents 0.7.9 vs. published docs

@@ -50,7 +50,7 @@ from typing import Any
 #   grep -rhoE 'name="[a-z_]+"' \
 #     .venv/lib/*/site-packages/deepagents/middleware/*.py | sort -u
 # `write_todos` comes from langchain's TodoListMiddleware, which agent.py adds
-# explicitly because create_deep_agent 0.7.1 does not bind it (see CLAUDE.md).
+# explicitly because create_deep_agent 0.7.9 does not bind it (see CLAUDE.md).
 # Going stale here causes a false "unknown", never a missed defect, and the
 # message below says so.
 HARNESS_TOOLS = frozenset(
