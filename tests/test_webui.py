@@ -526,7 +526,7 @@ def test_streamlit_is_an_extra_not_a_core_dependency():
     """`langgraph.json` installs a plain `.`, so a core dep ships to the platform.
 
     The deployed graph never imports Streamlit, but carrying it there pulled in
-    ~35 transitive packages — pandas, pyarrow, altair, pydeck. A bare
+    ~27 transitive packages — pandas, pyarrow, altair, pydeck. A bare
     `uv add streamlit` would silently put it back.
     """
     project = _pyproject()["project"]

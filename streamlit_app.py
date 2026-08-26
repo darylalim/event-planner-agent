@@ -450,11 +450,13 @@ def _approval_panel(
             "above, before submitting."
         )
 
-    # Guarded twice, deliberately. `disabled` is presentation — it stops a click
-    # in the browser but is not a promise about what reaches this branch, and a
-    # click that slipped through with nothing chosen would resume the graph with
-    # an empty decision list against middleware that wants exactly one decision
-    # per pending action.
+    # Guarded twice, deliberately. Streamlit 1.62 does enforce `disabled` server
+    # side, dropping an incoming value for a disabled widget — but that is a
+    # property of the pinned version, not a promise about what reaches this
+    # branch. A click that slipped through with nothing chosen would resume the
+    # graph with an empty decision list against middleware that wants exactly
+    # one decision per pending action. The re-check costs nothing and does not
+    # depend on which Streamlit is installed.
     if submitted and ready:
         # Compare-and-swap against live state, because `reviews` is as old as the
         # last full run. If another session answered this interrupt in between,

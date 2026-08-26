@@ -83,7 +83,7 @@ def test_hosted_mode_allows_missing_checkpointer(scripted):
 def test_planning_tool_is_bound(scripted):
     """The orchestrator prompt tells the model to plan with `write_todos`.
 
-    create_deep_agent 0.7.1 does not bind it by default, so agent.py adds
+    create_deep_agent 0.7.9 does not bind it by default, so agent.py adds
     TodoListMiddleware explicitly. Without this test that regression is
     invisible until the model hallucinates a call to a missing tool.
     """

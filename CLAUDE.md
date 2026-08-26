@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 An event planning agent built on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview)
-(`deepagents` 0.7.1), which wraps LangGraph. `create_deep_agent` returns a compiled
+(`deepagents` 0.7.9), which wraps LangGraph. `create_deep_agent` returns a compiled
 LangGraph graph, so checkpointers, `interrupt()`, streaming, and Studio all work underneath.
 
 `README.md` is detailed and current — read it for the *why* behind the design, the
@@ -39,8 +39,8 @@ how a command is run; `/astral:ruff` before linting or formatting; `/astral:ty` 
 type checking. All three tools are already configured for this repo — see below.
 
 `streamlit` is a **`web` extra**, not a core dependency. `langgraph.json` installs a plain
-`.`, so leaving it in `[project.dependencies]` shipped Streamlit and ~35 transitive packages
-(pandas, pyarrow, altair, pydeck) in a deployment image whose graph never imports them — 101
+`.`, so leaving it in `[project.dependencies]` shipped Streamlit and ~27 transitive packages
+(pandas, pyarrow, altair, pydeck) in a deployment image whose graph never imports them — 98
 resolved packages against 65. The `dev` group self-references `event-planner-agent[web]`, so
 a checkout still gets the front end from `uv sync` alone and CI's plain `uv sync --locked`
 runs the AppTest suite unchanged. A **non-dev** install that wants the page needs
@@ -237,11 +237,14 @@ or a `snapshot.` read *inside* it reintroduces staleness that no test will catch
 run. Submitting escapes deliberately — `st.rerun()` defaults to `scope="app"`, which is
 what lets the turn run from the main script against freshly read state.
 
-**A disabled Streamlit button is not a guard.** `disabled=` stops a click in the browser
-and says nothing about what reaches the branch behind it. The approval submit button
-checks `ready` again in the handler; the first version did not, and
-`test_submitting_with_no_decision_sends_nothing` caught it resuming the graph with an
-empty decision list.
+**A disabled Streamlit button became a guard, and the reason to distrust it still stands.**
+On 1.60 `disabled=` was presentation: it stopped a click in the browser and said nothing about
+what reached the branch behind it, and `test_submitting_with_no_decision_sends_nothing` caught
+the first version resuming the graph with an empty decision list. Streamlit 1.62 enforces it
+server-side — `WidgetMetadata` carries `disabled`, and the runtime drops an incoming value for
+a disabled widget as stale or forged. The submit handler still re-checks `ready`, and should:
+that copy is what holds if the pin ever moves back. Note the upgrade also cost that test its
+teeth — it now passes on Streamlit's enforcement whether or not the page keeps its own check.
 
 **Approval widget identity also carries the turn attempt, not just the checkpoint.**
 `review_token` mixes in the checkpoint id, which only advances when the graph does — so a
@@ -304,7 +307,7 @@ Its default `recursion_limit` of 25 strands a session after ~5 tool calls; the C
 Adding middleware changes this constant — `test_step_budget_survives_a_long_planning_session`
 guards it.
 
-## deepagents 0.7.1 vs. published docs
+## deepagents 0.7.9 vs. published docs
 
 Three documented behaviours don't match the installed package:
 

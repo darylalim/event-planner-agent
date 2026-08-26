@@ -370,7 +370,12 @@ def test_respond_is_never_offered_even_when_allowed(page):
 
 
 def test_submitting_with_no_decision_sends_nothing(page):
-    """`disabled=` stops the click in a browser; it is not the guard."""
+    """From Streamlit 1.62 `disabled=` is enforced server side, not just in the browser.
+
+    So this now pins the framework's enforcement rather than `_approval_panel`'s own
+    `ready` re-check: the click is dropped before the handler either way, and deleting
+    that re-check would leave this green. On 1.60 it caught exactly that bug.
+    """
     at, fake = page(_interrupt())
     assert at.button[0].disabled
     at.button[0].click().run()

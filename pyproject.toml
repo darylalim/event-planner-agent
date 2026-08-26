@@ -10,13 +10,13 @@ requires-python = ">=3.11,<4.0"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
-    "deepagents>=0.7.1",
-    "langchain-anthropic>=1.5.3",
+    "deepagents>=0.7.9",
+    "langchain-anthropic>=1.6.1",
     "langchain-tavily>=0.2.18",
-    "langgraph>=1.2.10",
+    "langgraph>=1.2.11",
     "langgraph-checkpoint-sqlite>=3.1.1",
-    "langsmith>=0.10.15",
-    "python-dotenv>=1.0.1",
+    "langsmith>=0.11.1",
+    "python-dotenv>=1.2.3",
 ]
 
 [project.scripts]
@@ -24,7 +24,7 @@ event-planner = "event_planner.cli:main"
 
 [project.optional-dependencies]
 web = [
-    "streamlit>=1.60.0",
+    "streamlit>=1.62.0",
 ]
 
 [build-system]
@@ -42,7 +42,7 @@ dev = [
     # Streamlit's AppTest, and CI runs a plain `uv sync --locked`. What this
     # does NOT do is put Streamlit in the built package — `langgraph.json`
     # installs `.` with no extras, so the deployed graph, which never imports
-    # it, no longer ships it or its ~30 transitive dependencies.
+    # it, no longer ships it or its ~27 transitive dependencies.
     "event-planner-agent[web]",
 ]
 

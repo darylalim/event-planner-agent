@@ -26,7 +26,7 @@ Three things worth knowing if you change this:
 * `interrupt_on` silently does nothing without a checkpointer. The build below
   will refuse to hand back an un-gated agent rather than let that pass quietly.
 * `TodoListMiddleware` is added explicitly. Despite what the Deep Agents docs
-  say, `create_deep_agent` in 0.7.1 does not bind `write_todos` on its own —
+  say, `create_deep_agent` in 0.7.9 does not bind `write_todos` on its own —
   verified by inspecting the tools actually bound to the model. The
   orchestrator prompt tells the agent to plan with `write_todos`, so without
   this the model would be instructed to call a tool that does not exist.
@@ -153,7 +153,7 @@ def build_agent(
         tools=ORCHESTRATOR_TOOLS,
         system_prompt=ORCHESTRATOR_PROMPT,
         subagents=SUBAGENTS,
-        # Not included by create_deep_agent in 0.7.1 — see module docstring.
+        # Not included by create_deep_agent in 0.7.9 — see module docstring.
         # Cast: TodoListMiddleware is generic over context, and the checker
         # treats that parameter as invariant against our PlannerContext.
         middleware=cast("Any", (TodoListMiddleware(),)),

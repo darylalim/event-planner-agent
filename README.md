@@ -42,7 +42,7 @@ directory and to flag that reputation data went unchecked.
 
 The browser UI's dependency is a `web` **extra** rather than a core one, so the
 CLI and the LangGraph Platform image — neither of which imports Streamlit — do
-not carry it or its ~35 transitive packages. A checkout still gets it from
+not carry it or its ~27 transitive packages. A checkout still gets it from
 `uv sync` alone, because the `dev` group asks for `event-planner-agent[web]`; a
 non-dev install that wants the page needs `uv sync --extra web`.
 
@@ -383,7 +383,7 @@ and not by the suite. The invariant that makes the isolation safe — that the
 panel reads no graph state while rendering — is pinned by
 `test_the_panel_reads_no_graph_state_while_rendering`.
 
-## Notes on `deepagents` 0.7.1
+## Notes on `deepagents` 0.7.9
 
 Three places where the published guidance and the installed package disagree.
 All were found by inspecting the package, and all are covered by tests:
