@@ -372,15 +372,41 @@ def test_respond_is_never_offered_even_when_allowed(page):
 def test_submitting_with_no_decision_sends_nothing(page):
     """From Streamlit 1.62 `disabled=` is enforced server side, not just in the browser.
 
-    So this now pins the framework's enforcement rather than `_approval_panel`'s own
-    `ready` re-check: the click is dropped before the handler either way, and deleting
-    that re-check would leave this green. On 1.60 it caught exactly that bug.
+    So this pins the framework's enforcement rather than `_approval_panel`'s own
+    `ready` re-check: the click is dropped before the handler either way. The
+    guard itself is covered by the next test, which does not rely on Streamlit
+    to stop the click.
     """
     at, fake = page(_interrupt())
     assert at.button[0].disabled
     at.button[0].click().run()
     assert fake.sent == []
     assert any("Approval required" in s.value for s in at.subheader)
+
+
+def test_a_submit_that_slips_past_the_disabled_button_sends_nothing(page, monkeypatch):
+    """The handler's `ready` re-check, exercised without Streamlit's help.
+
+    `ready` and `disabled=` derive from the same value, so once 1.62 began
+    enforcing `disabled=` server side no sequence of real clicks could reach the
+    branch with `ready` false — which means the test above passes whether or not
+    the page keeps its own guard, and deleting `and ready` goes unnoticed.
+
+    Forcing the button to report a click is therefore the only way to exercise
+    the case the guard exists for: a submit arriving with nothing chosen, as it
+    would on an older Streamlit, or if `disabled=` regressed the way it already
+    behaved once. Resuming here would push an empty decision list at middleware
+    that requires exactly one decision per pending action.
+    """
+    real_button = st.button
+
+    def clicked_anyway(label, *args, **kwargs):
+        real_button(label, *args, **kwargs)
+        return str(label).startswith("Submit")
+
+    monkeypatch.setattr(st, "button", clicked_anyway)
+    _, fake = page(_interrupt())
+    assert fake.sent == [], "a submit with no decision chosen reached the graph"
 
 
 def test_approve_resumes_with_an_approve_decision(page):

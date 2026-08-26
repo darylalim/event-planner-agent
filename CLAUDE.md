@@ -16,7 +16,7 @@ what you need to *change code* safely.
 uv sync                                    # install (uv required; .python-version pins 3.14)
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 198 tests, ~5s, fully offline
+uv run pytest                              # 201 tests, ~6s, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -118,18 +118,27 @@ is the **default**, not a route:
 | --- | --- | --- |
 | `/memories/` | `StoreBackend(namespace=memory_namespace)` | Per user, across sessions |
 | `/events/` | `StoreBackend(namespace=events_namespace)` | Per user, across sessions |
-| `/large_tool_results/` | `StoreBackend(namespace=artifacts_namespace)` | Per user, across sessions |
-| `/conversation_history/` | `StoreBackend(namespace=artifacts_namespace)` | Per user, across sessions |
+| `/artifacts/` (`ARTIFACTS_ROOT`) | `StoreBackend(namespace=artifacts_namespace)` | Per user, across sessions |
 | everything else | `FilesystemBackend(root_dir=workspace/, virtual_mode=True)` | **Shared across all sessions** |
 
-The last two are deepagents' paths, not ours, and nothing in this repo names them at a call
-site: `FilesystemMiddleware` derives both from the composite's `artifacts_root` and offloads
-to them itself once a tool result passes `tool_token_limit_before_evict` (20k tokens) or an
-evicted turn passes `human_message_token_limit_before_evict` (50k). What spills is the tool's
-own output — a named client's venue shortlist or budget — so unrouted they put exactly the
-data `/events/` exists to protect back on the shared root. They are scoped apart from
-`/events/` so `cli._export` keeps emitting the planner's files rather than the harness's
-overflow.
+`/artifacts/` is deepagents' territory, not ours, and nothing in this repo writes beneath it —
+which is why it was missed. `FilesystemMiddleware` derives `<root>/large_tool_results/` and
+`<root>/conversation_history/` from the composite's `artifacts_root` and offloads on its own
+once a tool result passes `tool_token_limit_before_evict` (20k tokens) or a human message
+passes `human_message_token_limit_before_evict` (50k). The two carry different things and both
+belong to the client: a tool's output — a named account's shortlist or costed budget — and the
+planner's own typed brief, which `_evict_and_truncate_messages` takes from the last
+`HumanMessage`, never from a tool result.
+
+**Route the root, never the names derived beneath it.** Those names are deepagents' to change,
+so two hardcoded prefixes fail open on a rename with nothing to go red. Routing them
+separately is worse than useless: `StoreBackend` strips the matched prefix before keying, so
+two routes sharing `artifacts_namespace` flatten into one bucket and each directory lists and
+reads the other's files — which matters because deepagents tells the model to grep
+`/large_tool_results/` to recover an offload. `test_the_two_offload_paths_do_not_alias` and
+`test_the_prefixes_deepagents_derives_stay_under_the_routed_root` guard both halves. The
+namespace is kept apart from `/events/` so `cli._export` emits the planner's files rather than
+the harness's overflow.
 
 The agent has `ls`/`read_file`/`glob`/`grep` over that filesystem root, and the root is a
 single static path — backend factories were removed in deepagents 0.7, so it cannot vary
@@ -254,8 +263,13 @@ what reached the branch behind it, and `test_submitting_with_no_decision_sends_n
 the first version resuming the graph with an empty decision list. Streamlit 1.62 enforces it
 server-side — `WidgetMetadata` carries `disabled`, and the runtime drops an incoming value for
 a disabled widget as stale or forged. The submit handler still re-checks `ready`, and should:
-that copy is what holds if the pin ever moves back. Note the upgrade also cost that test its
-teeth — it now passes on Streamlit's enforcement whether or not the page keeps its own check.
+that copy is what holds if the pin ever moves back. The upgrade did cost
+`test_submitting_with_no_decision_sends_nothing` its teeth: `ready` and `disabled=` derive
+from the same value, so no real click can now reach the branch with `ready` false, and it
+passes whether or not the guard is there.
+`test_a_submit_that_slips_past_the_disabled_button_sends_nothing` restores the coverage by
+forcing the button to report a click — the only way left to exercise the case the guard is
+for.
 
 **Approval widget identity also carries the turn attempt, not just the checkpoint.**
 `review_token` mixes in the checkpoint id, which only advances when the graph does — so a
@@ -317,8 +331,8 @@ turn (three `before_agent`, two `after_model`), and LangGraph counts each as a s
 LangGraph's own default of 25 never applies: `create_deep_agent` binds
 `recursion_limit: 9_999` onto the compiled graph, so the front ends' `DEFAULT_MAX_STEPS = 200`
 *lowers* that ceiling rather than raising it from 25. Dropping the explicit limit uncaps a
-runaway session to 9999, it does not strand one at 25. Adding middleware changes this constant — `test_step_budget_survives_a_long_planning_session`
-guards it.
+runaway session to 9999; it does not strand one at 25. Adding middleware changes this
+constant — `test_step_budget_survives_a_long_planning_session` guards it.
 
 ## deepagents 0.7.9 vs. published docs
 

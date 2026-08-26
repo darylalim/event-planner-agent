@@ -148,20 +148,27 @@ def events_namespace(runtime: Any) -> tuple[str, ...]:
 
 
 def artifacts_namespace(runtime: Any) -> tuple[str, ...]:
-    """Namespace for the harness's own spill (`/large_tool_results/`, `/conversation_history/`).
+    """Namespace for the harness's own spill, rooted at `ARTIFACTS_ROOT`.
 
-    These are deepagents' paths, not ours, which is why they are easy to miss.
-    `FilesystemMiddleware` derives both from the composite's `artifacts_root`
-    (`/` by default) and writes to them on its own: a tool result above
-    `tool_token_limit_before_evict` is offloaded to
-    `/large_tool_results/<tool_call_id>`, and evicted turns above
+    These are deepagents' paths, not ours, which is why they are easy to miss:
+    nothing in this repo names them at a call site. `FilesystemMiddleware`
+    derives them from the composite's `artifacts_root` and writes on its own
+    initiative — a tool result over `tool_token_limit_before_evict` to
+    `<root>/large_tool_results/<tool_call_id>`, and a human message over
     `human_message_token_limit_before_evict` to
-    `/conversation_history/<uuid>.md`. Unrouted, both land on the shared root —
-    carrying whatever the tool returned, which here is a named client's venue
-    shortlist or budget.
+    `<root>/conversation_history/<uuid>.md`.
 
-    Scoped apart from `events_namespace` rather than folded into it, so
-    `cli._export` keeps emitting the planner's own files and not the
-    harness's overflow.
+    The two carry different things and both are the client's. The first is a
+    tool's output: a named account's venue shortlist or costed budget. The
+    second is the planner's own typed brief, evicted from the context window —
+    `_evict_and_truncate_messages` offloads the last `HumanMessage`, never a
+    tool result. Unrouted, either lands on the root every session can
+    ls/read/glob/grep.
+
+    Routing `artifacts_root` itself rather than the two derived names is what
+    makes this survive the next release: one route covers whatever deepagents
+    derives beneath it, including a prefix it renames or adds. Kept apart from
+    `events_namespace` so `cli._export` keeps emitting the planner's files
+    rather than the harness's overflow.
     """
     return _scope(runtime, "artifacts")

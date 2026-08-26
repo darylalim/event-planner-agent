@@ -88,14 +88,15 @@ lands on the shared root:
 | --- | --- | --- |
 | `/memories/` | `StoreBackend`, namespaced per user | Across sessions |
 | `/events/` | `StoreBackend`, namespaced per user | Across sessions |
-| `/large_tool_results/` | `StoreBackend`, namespaced per user | Across sessions |
-| `/conversation_history/` | `StoreBackend`, namespaced per user | Across sessions |
+| `/artifacts/` | `StoreBackend`, namespaced per user | Across sessions |
 | everything else | `FilesystemBackend` rooted at `workspace/` | On disk, shared |
 
-The last two are deepagents' own paths. `FilesystemMiddleware` offloads a tool result over
-20k tokens, or an evicted turn over 50k, without anything here naming them — and what spills
-is the tool's output, which in this domain is a named client's shortlist or budget. Routing
-them is the same rule as `/events/`, applied to a path the harness writes rather than we do.
+`/artifacts/` is deepagents' own territory. `FilesystemMiddleware` derives
+`large_tool_results/` and `conversation_history/` beneath it and offloads a tool result over
+20k tokens, or a human message over 50k, without anything here naming either path. What
+spills is a named client's shortlist or costed budget, and the planner's own typed brief.
+Routing is the same rule as `/events/`, applied to paths the harness writes rather than we
+do — and applied to the *root*, because the names below it are deepagents' to rename.
 
 Only `/skills/` currently lands on that shared root. The filesystem backend is
 rooted at `workspace/`, **not** the repo root, and runs with

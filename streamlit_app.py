@@ -566,8 +566,9 @@ except Exception as exc:  # noqa: BLE001 - surface it rather than a blank page
 
 config: dict[str, Any] = {
     "configurable": {"thread_id": thread},
-    # LangGraph's default of 25 strands a session after ~5 tool calls with this
-    # middleware stack. Same budget the CLI uses, imported rather than restated.
+    # A ceiling, not a rescue: create_deep_agent binds 9_999 onto the compiled
+    # graph, so LangGraph's default of 25 never applies and this lowers the
+    # bound. Same budget the CLI uses, imported rather than restated.
     "recursion_limit": DEFAULT_MAX_STEPS,
 }
 context = PlannerContext(user_id=user_id)
@@ -652,7 +653,15 @@ with stored_slot:
             "and event files that carry across threads."
         )
     else:
-        for kind, icon in (("memories", ":material/psychology:"), ("events", ":material/folder:")):
+        for kind, icon in (
+            ("memories", ":material/psychology:"),
+            ("events", ":material/folder:"),
+            # deepagents' offload spill rather than the planner's own files, but
+            # it is the client's data and nothing evicts it. Hiding it would
+            # make the store the only place it exists and the one place nobody
+            # looks.
+            ("artifacts", ":material/archive:"),
+        ):
             items, namespace = stored_items(store, user_id, kind)
             if not items:
                 st.caption(f"{icon} no {kind} yet")

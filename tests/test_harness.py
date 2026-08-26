@@ -260,9 +260,10 @@ def test_step_budget_survives_a_long_planning_session(scripted):
     """Every middleware node counts as a LangGraph super-step.
 
     This harness runs five middleware nodes per model turn, so a tool round
-    trip costs far more than the two steps (model + tools) you would expect.
-    LangGraph's default `recursion_limit` of 25 therefore strands a real
-    session after only a handful of tool calls — measured live, not guessed.
+    trip costs far more than the two steps (model + tools) you would expect —
+    measured live, not guessed. `DEFAULT_MAX_STEPS` is a ceiling rather than a
+    rescue from LangGraph's default of 25: `create_deep_agent` binds
+    `recursion_limit: 9_999` onto the graph, so 25 never applies here.
 
     If middleware is added or removed, this test reports the new per-round-trip
     cost rather than letting a silent truncation reach users.
@@ -301,7 +302,12 @@ def test_step_budget_survives_a_long_planning_session(scripted):
         f"budget of {DEFAULT_MAX_STEPS} affords only ~{affordable} tool round "
         f"trips at {per_round_trip} steps each — too few for a planning session"
     )
-    assert DEFAULT_MAX_STEPS > 25, "must exceed LangGraph's default of 25"
+    bound = (getattr(graph, "config", None) or {}).get("recursion_limit")
+    assert bound is not None, "deepagents no longer binds a recursion_limit to the graph"
+    assert DEFAULT_MAX_STEPS < bound, (
+        f"DEFAULT_MAX_STEPS={DEFAULT_MAX_STEPS} caps nothing: create_deep_agent binds "
+        f"{bound} onto the compiled graph, so any larger value is inert"
+    )
 
 
 # Memory scoping and tenant isolation are covered in tests/test_security.py.

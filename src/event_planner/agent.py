@@ -5,15 +5,18 @@ Backend layout — the load-bearing decision in this file:
     CompositeBackend
       "/memories/"   -> StoreBackend(namespace=per-user)       persists across sessions
       "/events/"     -> StoreBackend(namespace=per-user)       persists across sessions
+      "/artifacts/"  -> StoreBackend(namespace=per-user)       persists across sessions
       default        -> FilesystemBackend(root_dir=workspace)  on disk, shared by everyone
 
 `CompositeBackend` matches the longest route prefix first, and the filesystem
 backend is the **default** rather than a route — so a path matching no route
 does not fail, it lands on a root that every session can read. Anything the
-agent writes under `/memories/` or `/events/` goes to the LangGraph store in
-that user's namespace and survives the thread; everything else is an ordinary
-file in the workspace directory, visible to every other planner. See
-`build_backend` for why `/events/` in particular has to be routed.
+agent writes under `/memories/`, `/events/` or `/artifacts/` goes to the
+LangGraph store in that user's namespace and survives the thread; everything
+else is an ordinary file in the workspace directory, visible to every other
+planner. Only `/skills/` is meant to be there. See `build_backend` for why
+`/events/` has to be routed, and why `/artifacts/` is routed at its root
+rather than by the names deepagents derives beneath it.
 
 Three things worth knowing if you change this:
 
@@ -69,6 +72,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 #: Everything the agent can see on disk. Deliberately not the repo root.
 WORKSPACE = PROJECT_ROOT / "workspace"
 
+#: Where deepagents offloads its own spill. `FilesystemMiddleware` derives
+#: `<root>/large_tool_results/` and `<root>/conversation_history/` from the
+#: composite's `artifacts_root`, so routing the root covers both — and covers
+#: whatever a later release renames or adds beneath it. Named rather than
+#: inlined so `build_backend` and the tests cannot drift on the literal.
+ARTIFACTS_ROOT = "/artifacts/"
+
 #: Decisions an operator may take on a gated tool. `respond` is omitted: a
 #: free-text reply to a booking request invites the model to treat commentary
 #: as confirmation. Approve it, fix it, or refuse it.
@@ -96,8 +106,8 @@ def build_backend() -> CompositeBackend:
     """Compose shared read-only skills with per-user private storage.
 
     Only `/skills/` lives on the filesystem, and it is shared reference
-    material rather than user data. Both `/events/` and `/memories/` route to
-    per-user store namespaces.
+    material rather than user data. `/events/`, `/memories/` and
+    `/artifacts/` all route to per-user store namespaces.
 
     `/events/` has to be routed rather than left on disk: `backend` takes one
     static instance (backend factories were removed in deepagents 0.7), so a
@@ -106,13 +116,19 @@ def build_backend() -> CompositeBackend:
     guest details, and budgets — leaving them on a shared root lets one
     planner's session read another's brief.
 
-    `/large_tool_results/` and `/conversation_history/` are routed for the same
-    reason, and are easier to miss because nothing here writes them:
-    `FilesystemMiddleware` derives both from the composite's `artifacts_root`
-    and offloads to them on its own once a tool result or an evicted turn goes
-    over its token limit. What spills is the tool's own output — a named
-    client's venue shortlist or budget — so left unrouted they would put
+    `ARTIFACTS_ROOT` is routed for the same reason and is easier to miss,
+    because nothing here writes beneath it: `FilesystemMiddleware` derives
+    `<root>/large_tool_results/` and `<root>/conversation_history/` from the
+    composite's `artifacts_root` and offloads to them on its own once a tool
+    result or a human message goes over its token limit. What spills is a
+    tool's output and the planner's own brief, so left unrouted they would put
     exactly the data `/events/` is routed to protect back on the shared root.
+
+    Routing the root rather than the two derived names is deliberate. Those
+    names are deepagents' to change; `artifacts_root` is the seam it gives us,
+    so one route covers every path it derives now and any it adds later. The
+    alternative — two hardcoded prefixes — fails open on a rename, silently and
+    with nothing to go red.
 
     No directories are created here. `workspace/memories` used to be made on
     disk and then permanently shadowed by the `/memories/` route, so it showed
@@ -124,9 +140,9 @@ def build_backend() -> CompositeBackend:
         routes={
             "/memories/": StoreBackend(namespace=memory_namespace),
             "/events/": StoreBackend(namespace=events_namespace),
-            "/large_tool_results/": StoreBackend(namespace=artifacts_namespace),
-            "/conversation_history/": StoreBackend(namespace=artifacts_namespace),
+            ARTIFACTS_ROOT: StoreBackend(namespace=artifacts_namespace),
         },
+        artifacts_root=ARTIFACTS_ROOT,
     )
 
 

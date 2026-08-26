@@ -15,7 +15,7 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from event_planner.agent import WORKSPACE, build_backend
+from event_planner.agent import ARTIFACTS_ROOT, WORKSPACE, build_backend
 from event_planner.cli import STATE_DIR, _check_db_outside_workspace
 from event_planner.context import (
     PlannerContext,
@@ -282,58 +282,82 @@ def test_user_data_paths_are_routed_to_per_user_stores():
     deepagents 0.7 — and the agent has ls/read/glob/grep over it, so anything
     left there is readable by every session.
 
-    The last two are deepagents' own paths rather than ours, which is why they
-    were missed: `FilesystemMiddleware` offloads to them on its own once a tool
-    result or an evicted turn crosses a token limit, so nothing in this repo
-    names them at a call site.
+    `ARTIFACTS_ROOT` is deepagents' territory rather than ours, which is why it
+    was missed: `FilesystemMiddleware` offloads beneath it on its own once a
+    tool result or a human message crosses a token limit, so nothing in this
+    repo names those paths at a call site.
     """
     from deepagents.backends import StoreBackend
 
     routes = build_backend().routes
-    for path in (
-        "/events/",
-        "/memories/",
-        "/large_tool_results/",
-        "/conversation_history/",
-    ):
+    for path in ("/events/", "/memories/", ARTIFACTS_ROOT):
         assert path in routes, f"{path} falls through to the shared filesystem"
         assert isinstance(routes[path], StoreBackend), f"{path} is not store-backed"
 
 
-def test_offloaded_tool_results_do_not_land_on_the_shared_root():
+def test_the_prefixes_deepagents_derives_stay_under_the_routed_root():
+    """The route is on `artifacts_root`; the writes happen a level below it.
+
+    Asserting the literal `/artifacts/large_tool_results/` would pin this test
+    against the same string the route table already holds, so a deepagents
+    rename would move the write, drop client data on the shared root, and leave
+    both green. Ask the middleware what it actually derived instead.
+    """
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+
+    middleware = FilesystemMiddleware(backend=build_backend())
+    derived = (
+        middleware._large_tool_results_prefix,
+        middleware._conversation_history_prefix,
+    )
+    for prefix in derived:
+        assert prefix.startswith(ARTIFACTS_ROOT), (
+            f"{prefix} is outside {ARTIFACTS_ROOT} and falls to the shared root"
+        )
+    assert len(set(derived)) == len(derived), f"derived prefixes collide: {derived}"
+
+
+def test_offloaded_tool_results_do_not_land_on_the_shared_root(tmp_path, monkeypatch):
     """Membership in `routes` is not proof that a nested write follows it.
 
-    The composite matches longest prefix first and the real offload path is
-    `/large_tool_results/<tool_call_id>`, a level below the route. So drive a
-    real write through the real graph and check both ends: it reached the
-    caller's own store namespace, and the shared disk root did not change.
+    So drive a real `write_file` at the path the middleware actually derives
+    and check both ends: it reached the caller's own store namespace, and the
+    filesystem root gained nothing. The root is redirected to `tmp_path` first,
+    because on a regression this write lands on disk — pointed at the real
+    shared root it would also red two neighbouring tests and leave a directory
+    behind that survives the run.
     """
+    from deepagents.middleware.filesystem import FilesystemMiddleware
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.store.memory import InMemoryStore
 
-    from event_planner.agent import build_agent
+    from event_planner import agent as agent_module
 
+    monkeypatch.setattr(agent_module, "WORKSPACE", tmp_path)
+    spill = FilesystemMiddleware(backend=build_backend())._large_tool_results_prefix
     store = InMemoryStore()
-    before = {p.name for p in WORKSPACE.iterdir()}
-    model = _ScriptedWriter(
-        [
-            AIMessage(
-                content="Offloading.",
-                tool_calls=[
-                    {
-                        "name": "write_file",
-                        "args": {
-                            "file_path": "/large_tool_results/tc_abc123",
-                            "content": "Acme offsite — 85 guests, $45k ceiling.",
-                        },
-                        "id": "spill-1",
-                    }
-                ],
-            ),
-            AIMessage(content="Done."),
-        ]
+    graph = agent_module.build_agent(
+        model=_ScriptedWriter(
+            [
+                AIMessage(
+                    content="Offloading.",
+                    tool_calls=[
+                        {
+                            "name": "write_file",
+                            "args": {
+                                "file_path": f"{spill}/tc_abc123",
+                                "content": "Acme offsite — 85 guests, $45k ceiling.",
+                            },
+                            "id": "spill-1",
+                        }
+                    ],
+                ),
+                AIMessage(content="Done."),
+            ]
+        ),
+        checkpointer=InMemorySaver(),
+        store=store,
     )
-    graph = build_agent(model=model, checkpointer=InMemorySaver(), store=store)
     result = graph.invoke(
         {"messages": [{"role": "user", "content": "go"}]},
         config={"configurable": {"thread_id": "spill-thread"}},
@@ -346,7 +370,69 @@ def test_offloaded_tool_results_do_not_land_on_the_shared_root():
 
     who = _Runtime(PlannerContext(user_id="alice@example.com"))
     assert list(store.search(artifacts_namespace(who))), "offload missed the per-user store"
-    assert {p.name for p in WORKSPACE.iterdir()} == before, "offload reached the shared root"
+    assert list(tmp_path.iterdir()) == [], "offload reached the shared filesystem root"
+
+
+def test_the_two_offload_paths_do_not_alias(tmp_path, monkeypatch):
+    """One namespace shared by two routes flattened them into a single bucket.
+
+    `StoreBackend` strips the matched route prefix before keying, so routing
+    `/large_tool_results/` and `/conversation_history/` *separately* to one
+    namespace made each directory list the other's files and resolve the
+    other's reads. deepagents tells the model to grep `/large_tool_results/` to
+    recover an offloaded result, so the recovery path was being handed
+    mislabelled entries. Routing `ARTIFACTS_ROOT` keeps them distinct
+    sub-paths of one namespace.
+    """
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.store.memory import InMemoryStore
+
+    from event_planner import agent as agent_module
+
+    monkeypatch.setattr(agent_module, "WORKSPACE", tmp_path)
+    middleware = FilesystemMiddleware(backend=build_backend())
+    results = middleware._large_tool_results_prefix
+    history = middleware._conversation_history_prefix
+
+    def write(path, content, call_id):
+        return AIMessage(
+            content="Writing.",
+            tool_calls=[
+                {
+                    "name": "write_file",
+                    "args": {"file_path": path, "content": content},
+                    "id": call_id,
+                }
+            ],
+        )
+
+    graph = agent_module.build_agent(
+        model=_ScriptedWriter(
+            [
+                write(f"{results}/tc_abc123", "SPILLED SHORTLIST", "w1"),
+                write(f"{history}/deadbeef.md", "EVICTED BRIEF", "w2"),
+                AIMessage(
+                    content="Listing.",
+                    tool_calls=[{"name": "ls", "args": {"path": results}, "id": "w3"}],
+                ),
+                AIMessage(content="Done."),
+            ]
+        ),
+        checkpointer=InMemorySaver(),
+        store=InMemoryStore(),
+    )
+    result = graph.invoke(
+        {"messages": [{"role": "user", "content": "go"}]},
+        config={"configurable": {"thread_id": "alias-thread"}},
+        context=PlannerContext(user_id="alice@example.com"),
+    )
+
+    listings = [m for m in result["messages"] if getattr(m, "name", None) == "ls"]
+    assert listings, "ls never ran"
+    listed = str(listings[-1].content)
+    assert "tc_abc123" in listed, f"the directory lost its own file: {listed}"
+    assert "deadbeef" not in listed, f"{results} is listing {history}'s files: {listed}"
 
 
 def test_offloads_are_isolated_per_user_and_kept_out_of_events():

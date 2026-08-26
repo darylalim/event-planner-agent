@@ -36,10 +36,14 @@ STATE_DIR = PROJECT_ROOT / ".state"
 
 #: LangGraph counts every node as a super-step, and this harness runs five
 #: middleware nodes per model turn (three `before_agent`, two `after_model`).
-#: Measured against the live model, one tool round trip costs ~4 steps, so
-#: LangGraph's default of 25 dies after about five tool calls — far short of a
-#: planning session that shortlists venues, checks dates, prices catering, and
-#: delegates to subagents. Budget for a long session instead.
+#: Measured against the live model, one tool round trip costs ~4 steps, so a
+#: planning session that shortlists venues, checks dates, prices catering and
+#: delegates to subagents needs room for dozens of them.
+#:
+#: This is a ceiling, not a rescue. LangGraph's own default of 25 never reaches
+#: this agent — `create_deep_agent` binds `recursion_limit: 9_999` onto the
+#: compiled graph — so passing this lowers that bound rather than raising the
+#: default, and dropping it uncaps a runaway session instead of stranding one.
 DEFAULT_MAX_STEPS = 200
 
 BANNER = """\
@@ -368,7 +372,11 @@ def _show_memory(store: SqliteStore, user_id: str | None) -> None:
         print("\n  no --user given, so storage is scoped to this thread only.")
         print("  Pass --user <id> for memory that carries across threads.\n")
         return
-    for kind in ("memories", "events"):
+    # "artifacts" is deepagents' offload spill, not something the planner
+    # wrote. Listed anyway: it is the client's data, it accumulates with no
+    # eviction, and before it was routed it at least sat on disk where an
+    # operator could see and delete it.
+    for kind in ("memories", "events", "artifacts"):
         items, namespace = _stored(store, user_id, kind)
         if not items:
             print(f"\n  no {kind} stored yet under {namespace}")
