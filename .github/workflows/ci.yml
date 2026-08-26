@@ -2,20 +2,23 @@
 # .claude/hooks/README.md), so a contributor without Claude Code gets the same
 # feedback the author gets at edit time:
 #
-#   ruff check      lint_gate.sh
-#   ty check        lint_gate.sh
-#   pytest          test_gate.sh
-#   prompt drift    check_prompt_drift.py
-#   ruff format     no local counterpart yet — see below
+#   ruff check           lint_gate.sh
+#   ruff format --check  lint_gate.sh
+#   ty check             lint_gate.sh  — scoped to the edited file locally,
+#                                        whole-project here
+#   pytest               test_gate.sh
 #
-# It does NOT stand in for the three PreToolUse guards (guard_workspace.sh,
-# protect_files.sh, guard_bash.sh), which block writes rather than inspect
-# them. Nothing here reproduces those: a pull request that parks client data
-# under workspace/ is refused on the author's machine and green here.
+# Prompt/tool drift was a bespoke hook (check_prompt_drift.py) plus a canary
+# step here that planted drift to prove the gate had run at all. It is now two
+# ordinary tests — test_every_bound_tool_is_named_somewhere and
+# test_every_irreversible_tool_is_actually_bound in tests/test_security.py — so
+# the `test` job covers it on every supported Python, and pytest reporting a
+# pass is already proof it ran. No canary needed.
 #
-# `ruff format --check` is the one check with no hook behind it — lint_gate.sh
-# still runs `check` only. Adding it there is an operator edit, because
-# protect_files.sh guards .claude/ against writes from inside a session.
+# It does NOT stand in for protect_files.sh, the one remaining PreToolUse
+# guard, which blocks writes rather than inspecting them. Nothing here
+# reproduces it: a pull request is not a control over a local `.env` clobber,
+# and a session that neuters a guard script takes effect on the next tool call.
 name: CI
 
 on:
@@ -100,39 +103,6 @@ jobs:
       - name: Types (ty)
         if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
         run: uvx "$TY" check
-
-      # check_prompt_drift.py is a PostToolUse hook: it reads a Claude Code
-      # payload on stdin and returns 0 for any file outside its TRIGGERS tuple.
-      # Running it and seeing 0 therefore proves nothing by itself — the same
-      # payload naming README.md exits 0 against a tree full of drift.
-      #
-      # So prove the gate is live before trusting its verdict: point it at a
-      # tree with drift planted in it and require a failure. That covers a
-      # stale path below AND a restructured TRIGGERS, neither of which a grep
-      # for the literal string would catch.
-      - name: Prompt/tool drift
-        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
-        env:
-          PAYLOAD: '{"tool_input":{"file_path":"src/event_planner/prompts.py"}}'
-        run: |
-          canary="$RUNNER_TEMP/drift-canary"
-          mkdir -p "$canary/workspace/skills/canary"
-          # The backticks are the point, not an accident: the hook's TOKEN
-          # regex only matches names written as `like_this`, so an unquoted
-          # canary name would be invisible to it and the probe would pass.
-          # shellcheck disable=SC2016
-          printf -- '---\nname: canary\n---\nCall `definitely_not_a_tool` now.\n' \
-            > "$canary/workspace/skills/canary/SKILL.md"
-
-          if printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$canary" \
-              uv run python .claude/hooks/check_prompt_drift.py
-          then
-            echo "::error::drift gate accepted planted drift — the check is not running"
-            exit 1
-          fi
-
-          printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$GITHUB_WORKSPACE" \
-            uv run python .claude/hooks/check_prompt_drift.py
 
   test:
     name: tests (py${{ matrix.python }})

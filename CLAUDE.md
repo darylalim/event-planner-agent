@@ -16,7 +16,7 @@ what you need to *change code* safely.
 uv sync                                    # install (uv required; .python-version pins 3.14)
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 201 tests, ~6s, fully offline
+uv run pytest                              # 203 tests, ~6s, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v

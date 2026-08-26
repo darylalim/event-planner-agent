@@ -6,22 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_workspace.sh\"",
-            "timeout": 10
-          },
-          {
-            "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect_files.sh\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_bash.sh\"",
             "timeout": 10
           }
         ]
@@ -40,11 +25,6 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/test_gate.sh\"",
             "timeout": 120
-          },
-          {
-            "type": "command",
-            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" python \"$CLAUDE_PROJECT_DIR/.claude/hooks/check_prompt_drift.py\"",
-            "timeout": 60
           }
         ]
       }

@@ -3,8 +3,11 @@
 #
 # All three are configured in pyproject.toml and all three currently pass.
 # CLAUDE.md: "Both tools are clean; keep them that way rather than adding
-# suppressions." Measured cost: ruff check 27ms, ruff format --check 20ms,
-# ty 93ms.
+# suppressions." Measured cost: ruff check 29ms, ruff format --check 20ms,
+# ty 62ms scoped -- ~110ms total, against test_gate.sh's ~5.9s, and the two
+# run in parallel, so this hook is free on any edit that also runs the suite.
+# It is NOT free on streamlit_app.py, which test_gate.sh does not watch; that
+# is the one file where this hook is the only local feedback there is.
 set -uo pipefail
 _hook_common="$(dirname "$0")/_common.sh"
 [ -r "$_hook_common" ] || {
@@ -73,10 +76,22 @@ if [ $? -ne 0 ]; then
   fi
 fi
 
+# SCOPED TO "$rel", deliberately. Run whole-project, this reported diagnostics
+# from files the edit never touched, under the header "failed after editing
+# $rel" and above the imperative "Fix the finding rather than adding a
+# suppression" -- asserting a causal link the hook cannot support. That is the
+# same misattribution the `runnable` guard above exists to prevent, on a
+# different axis, and it lands hardest mid-refactor, where cross-file
+# diagnostics are expected and transient. Measured: 62ms scoped, 203ms not.
+#
+# What scoping gives up is the caller you broke in another file. That is
+# covered, better, by test_gate.sh: 201 offline tests that import every module
+# and run on exactly the edits where cross-file breakage happens.
+#
 # ty infers its target from requires-python, so this checks against 3.11 (the
 # declared floor), not the 3.14 in .python-version. That is the useful
 # direction: it catches 3.12+ syntax that would break the claimed minimum.
-types=$(uvx "$TY" check 2>&1)
+types=$(uvx "$TY" check "$rel" 2>&1)
 if [ $? -ne 0 ]; then
   if runnable "$TY"; then
     status=1

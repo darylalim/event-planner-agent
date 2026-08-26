@@ -1,97 +1,134 @@
 # Claude Code hooks
 
-Configured in `../settings.json`. They load at **session start** — edits here
+Configured in `../settings.json`, which loads at **session start** — edits there
 take effect on the next `claude` invocation, and `/hooks` shows what is loaded.
+The scripts in *this* directory are different: `bash` re-reads them from disk on
+every invocation, so a change to one is live on the next tool call. That
+asymmetry is why `protect_files.sh` guards `.claude/hooks/` and deliberately
+does not guard `.claude/settings.json`.
 
 | Hook | Event | Fires on |
 | --- | --- | --- |
-| `guard_workspace.sh` | PreToolUse | writes under `workspace/` outside `skills/` |
-| `protect_files.sh` | PreToolUse | `.env*`, `uv.lock`, `.python-version`, `.claude/` |
-| `guard_bash.sh` | PreToolUse | `Bash` commands pairing a protected path with a write verb |
+| `protect_files.sh` | PreToolUse | `.env*` (except `.env.example`), and `.claude/hooks/` |
 | `lint_gate.sh` | PostToolUse | any `.py` in the project |
-| `test_gate.sh` | PostToolUse | `src/`, `tests/`, `workspace/skills/`, `pyproject.toml`, `uv.lock`, `langgraph.json` |
-| `check_prompt_drift.py` | PostToolUse | `prompts.py`, `subagents.py`, `agent.py`, `tools/`, `workspace/skills/` |
+| `test_gate.sh` | PostToolUse | `src/`, `tests/`, `workspace/`, `pyproject.toml` |
 
-`_common.sh` is sourced by every shell hook. It parses the payload once and
+`_common.sh` is sourced by both shell hooks. It parses the payload once and
 exports `HOOK_ROOT`, `HOOK_PATH` (absolute and lexically normalized) and
 `HOOK_CMD`. Parsing stdin per-hook is what produced the `./workspace/x`,
 `workspace/skills/../x` and `NotebookEdit` bypasses that used to exist.
 
 Exit codes follow the hook protocol: `0` allows, `2` blocks (PreToolUse) or
 feeds stderr back to the model (PostToolUse). Anything else is a non-blocking
-error the model never sees — which is why the guards below fail closed.
+error the model never sees — which is why the guards fail closed.
+
+## What was removed
+
+The set was six hooks and is now three. Each removal moved the check somewhere
+that covers strictly more, or removed a check that was net-negative.
+
+**`guard_bash.sh` — cut.** It paired a protected path with a "write-shaped verb"
+in the raw command string. The verb list counted `2>/dev/null` as a write and
+the substring `rm ` inside "confi**rm**"; the target list matched bare
+substrings with no argument position. Measured, it blocked five of six benign
+read-only commands — including `cp .env.example .env`, which is CLAUDE.md's own
+documented setup line — while *allowing* the write it existed to stop:
+
+```
+ALLOWED  printf hi > workspace/events/acme.md # see workspace/skills/venue-sourcing
+ALLOWED  cp workspace/skills/a.md workspace/events/b.md
+```
+
+The `*workspace/skills/*) ;;` arm cleared the target if that string appeared
+anywhere in the command, a trailing comment included. A guard that is inverted
+on both axes is worse than none: it teaches the model to strip `2>/dev/null` and
+to stop naming paths, degrading its own diagnostics, and it makes the other
+hooks untestable from inside a session.
+
+**`guard_workspace.sh` — cut, and over-covered.** `test_security.py` already
+holds both halves: `test_shared_filesystem_root_holds_only_reference_material`
+reds on any entry under `workspace/` other than `skills`, and
+`test_agent_cannot_see_a_state_directory_in_its_listing` covers `.state`. That
+first test now walks the full tree — its `startswith(".")` filter was dropped,
+because `FilesystemBackend.ls("/")` enumerates dot entries, so
+`workspace/.state/planner.sqlite` reached every session exactly as
+`workspace/events/acme.md` would. `test_gate.sh` now watches `workspace/` rather
+than `workspace/skills/`, so a write there runs those tests locally within
+seconds. That is strictly more than the hook covered: it sees writes from any
+tool, not just `Write`/`Edit`/`NotebookEdit`.
+
+**`check_prompt_drift.py` — cut, two of its four checks ported to pytest.**
+`missing` and `ungated` are now `test_every_bound_tool_is_named_somewhere` and
+`test_every_irreversible_tool_is_actually_bound` in `tests/test_security.py`.
+Verified against a planted half-rename (the tool function and its imports
+renamed, the `IRREVERSIBLE_TOOLS` literal and the prompts left stale): both
+fail, naming `place_hold` and `hold_venue` respectively.
+
+`misrouted` and `unknown` are deliberately **not** ported. Both keyed off the
+same premise — that a backticked `snake_case` token is a claimed tool call — and
+both refused legitimate prose. `"You never book. The orchestrator calls
+`hold_venue`, which pauses for a human."` was blocked, with a printed remedy
+suggesting `hold_venue` be bound to that subagent. Six of six prose probes were
+refused across two independent reviews.
+
+As tests rather than a hook, the surviving checks run on every path instead of
+five, on every supported Python, and for a contributor without Claude Code — and
+`.github/workflows/ci.yml` no longer needs its planted-drift canary, because a
+hook returning `0` proves nothing while pytest reporting a pass proves it ran.
 
 ## Also enforced in CI
 
-`.github/workflows/ci.yml` runs `ruff check`, `ruff format --check`, `ty check`,
-`pytest`, and `check_prompt_drift.py`, so a contributor without Claude Code gets
-this feedback on a pull request rather than not at all. Three things about that
-pairing are worth knowing:
+`.github/workflows/ci.yml` runs `ruff check`, `ruff format --check`, `ty check`
+and `pytest`, so a contributor without Claude Code gets this feedback on a pull
+request rather than not at all. Two things about that pairing are worth knowing:
 
-**The PreToolUse guards have no CI counterpart.** They block writes rather than
-inspect them, and a pull request has no equivalent — client data parked under
-`workspace/skills/acme/` is refused on the author's machine and green in CI. A
-green run means the five checks above passed, not that the guards would have
-allowed the edit. `tests/test_security.py` remains the enforceable boundary.
+**`protect_files.sh` has no CI counterpart.** It blocks writes rather than
+inspecting them, and a pull request has no equivalent. A PR is not a control
+over a local `.env` clobber — the file is gitignored and never reaches a runner
+— nor over a session that splices `exit 0` into a guard script, which takes
+effect on the next tool call.
 
-**CI proves the drift hook actually ran.** Invoking `check_prompt_drift.py` and
-seeing `0` means nothing by itself, because it exits `0` for any path outside
-its `TRIGGERS` — a stale payload path would pass silently. The workflow first
-points it at a tree with drift planted in it and requires a failure, which
-covers both a stale path and a restructured `TRIGGERS`.
-
-**The pins are asserted, not just documented.** See below.
+**The pins are asserted, not documented.** `ci.yml` pins `ruff@0.16.1` and
+`ty@0.0.65` in `env:` and its `static` job greps `lint_gate.sh` to fail when the
+two disagree. Keep the `RUFF="..."` / `TY="..."` spelling in that file; the
+canary matches on it.
 
 ## What these do not cover
 
 Stated plainly, because a guard that is trusted beyond its reach is worse than
 no guard.
 
-**`guard_bash.sh` is a heuristic, not a boundary.** It pairs a protected path
-with a write-shaped verb in the command string. It does not parse shell. An
-obfuscated path, a heredoc assembled at runtime, a write inside a script the
-command invokes, or a tool that writes as a side effect will all pass. Its verb
-list is also incomplete: `uvx ruff format .claude/hooks/check_prompt_drift.py`
-is a write to a protected path and goes straight through, while read-only
-commands that merely pair `2>&1` with one of these paths are refused. The exact
-guards are the Write/Edit ones; `guard_bash.sh` closes the obvious route only.
-The enforceable boundary remains `tests/test_security.py` and review.
-
 **Reads are not gated.** Nothing stops `cat .env` or reading another user's
 export. These hooks guard writes.
 
-**`workspace/skills/` is allowed wholesale.** Skills are shared reference
-material by design, so the whole subtree takes writes. Client data parked at
-`workspace/skills/acme/brief.md` passes both this guard and
-`test_shared_filesystem_root_holds_only_reference_material`, which inspects
-only the top level of `workspace/`.
+**`workspace/skills/` still takes writes.** Skills are shared reference material
+by design, so the subtree is writable, and
+`test_shared_filesystem_root_holds_only_reference_material` inspects only the
+top level of `workspace/`. Client data parked at `workspace/skills/acme/brief.md`
+passes both.
 
-**`check_prompt_drift.py` does not check which agent loads which skill.** The
-orchestrator lists `/skills/`, so the union of tools across skill-loading
-agents is every tool, which makes the per-agent version of that check
-degenerate. Skill tokens are validated against the global tool set.
+**These are development-time guards, not the tenant boundary.** They inspect
+Claude Code's own tool calls while you work on the repo. What the *running* agent
+writes is governed by `build_backend()`'s routing and the tests in
+`tests/test_security.py` — that is the enforceable boundary, and it is unchanged
+by anything in this directory.
 
-**`HARNESS_TOOLS` is a snapshot** of the tool names deepagents supplies,
-regenerated by the `grep` in the comment above it. Going stale produces a
-false "unknown", never a missed defect.
-
-**The gates pin `ruff` and `ty`** (`ruff@0.16.1`, `ty@0.0.65`) so an upstream
-release cannot fail every edit on untouched code. `.github/workflows/ci.yml`
-pins the same two, and its `static` job greps `lint_gate.sh` and fails when the
-two disagree — so this is no longer a pair kept in step by a comment asking you
-to remember. Drift there is the round trip CI exists to prevent: the local gate
-formats under one ruff, CI checks under another, and a pull request reds on code
-this hook just called clean. `CLAUDE.md` documents the manual commands unpinned,
-deliberately.
+**`lint_gate.sh` is scoped to the edited file.** It will not see a caller you
+broke elsewhere; `test_gate.sh` will. Run whole-project, `ty` reported
+diagnostics from untouched files under a header asserting the current edit
+caused them, which is a worse failure than the one scoping gives up.
 
 ## Turning them off
 
-Remove the entry from `../settings.json` and restart. `protect_files.sh` blocks
-edits to `.claude/` from inside a session on purpose — the operator makes that
-change directly. Debug with `claude --debug`.
+Remove the entry from `../settings.json` and restart — `protect_files.sh` does
+not block that file, deliberately. It *does* block the scripts here, so changing
+a guard is an operator action taken outside a session. Debug with `claude
+--debug`.
 
 ## Cost per edit
 
-ruff check + ruff format --check + ty ~140 ms on any `.py`; the suite ~1.2 s on
-watched paths; the drift check ~0.8 s on the files that can drift. The three
-PostToolUse hooks run in parallel, so a `src/` edit costs about the slowest.
+`lint_gate.sh` ~110 ms on any `.py` (ruff check 29 ms, ruff format --check
+20 ms, ty 62 ms scoped). `test_gate.sh` ~5.9 s on watched paths, of which 3.9 s
+is `test_streamlit_page.py`. The two run in parallel, so a `src/` edit costs
+about the slower — call it six seconds, and note that `streamlit_app.py` is the
+one edited file where `lint_gate.sh` runs alone and unmasked.
