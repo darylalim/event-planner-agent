@@ -8,12 +8,13 @@ that instructs the model to call a tool that was never bound.
 from __future__ import annotations
 
 import pytest
+from conftest import BACKTICKED, agent_bindings, bound_tool_names
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
-from event_planner.agent import build_agent
+from event_planner.agent import WORKSPACE, build_agent
 from event_planner.cli import DEFAULT_MAX_STEPS
 from event_planner.context import PlannerContext
 
@@ -307,6 +308,90 @@ def test_step_budget_survives_a_long_planning_session(scripted):
     assert DEFAULT_MAX_STEPS < bound, (
         f"DEFAULT_MAX_STEPS={DEFAULT_MAX_STEPS} caps nothing: create_deep_agent binds "
         f"{bound} onto the compiled graph, so any larger value is inert"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# prompt/tool drift
+# --------------------------------------------------------------------------- #
+#
+# prompts.py names tools as literal strings, so a rename ships an agent
+# instructed to call something that does not exist and nothing catches it at
+# import time. These checks used to live in .claude/hooks/check_prompt_drift.py
+# behind a PostToolUse trigger on five paths, plus a CI canary that planted
+# drift to prove the gate had run at all. As tests they need none of that: they
+# run on every path, in CI, and for a contributor without Claude Code.
+#
+# The hook's `unknown` check is deliberately not ported. It flagged any
+# backticked snake_case token that is not a tool anywhere, which made every
+# piece of prose a candidate and needed a hand-maintained vocabulary list
+# (HARNESS_TOOLS, EXTRA_NON_TOOL_TERMS) to stay quiet -- a second copy of
+# deepagents' tool names that fails open the moment the package adds one.
+
+
+def _named_in(text: str) -> set[str]:
+    return set(BACKTICKED.findall(text))
+
+
+def _named_anywhere() -> set[str]:
+    """Every snake_case token the model is shown, across prompts and skills.
+
+    Skills count as prompts here: workspace/skills/*/SKILL.md is loaded into
+    context at runtime and names tools in backticks the same way.
+    """
+    shown = [prompt for _, prompt, _ in agent_bindings()]
+    shown += [
+        p.read_text(encoding="utf-8") for p in sorted((WORKSPACE / "skills").glob("*/SKILL.md"))
+    ]
+    return {token for text in shown for token in _named_in(text)}
+
+
+def test_every_bound_tool_is_named_somewhere():
+    """A tool the model was given but never told about is a rename that only
+    landed on one side of the loop.
+
+    Checked globally rather than per agent: the orchestrator legitimately names
+    only two of its seven tools and delegates the rest, so a per-agent version
+    reports five false positives on a healthy tree.
+    """
+    orphaned = bound_tool_names() - _named_anywhere()
+    assert not orphaned, (
+        f"bound but named by no prompt or skill: {sorted(orphaned)}. Either the "
+        f"model is never told these exist, or a rename left the prompts naming "
+        f"the old spelling."
+    )
+
+
+def test_no_prompt_instructs_a_tool_its_agent_cannot_call():
+    """The complement of the test above, and the one it cannot see.
+
+    `test_every_bound_tool_is_named_somewhere` unions all four agents, so
+    budget-analyst's prompt naming `hold_venue` passes it: the tool is bound
+    somewhere and named somewhere. But binding is per agent, and that is what
+    decides what the model can actually call -- the subagent burns a turn on a
+    tool it was never given, and the failure surfaces as a confused transcript
+    rather than an error.
+
+    This check was dropped when the hook was pruned, on the grounds that
+    legitimate prose ("the orchestrator calls `hold_venue`, which pauses for a
+    human") would trip it. No prompt in this tree does that -- the exemption set
+    below is empty and the check is silent. Add a pair here, with the sentence
+    that justifies it, if prose ever needs to name another agent's tool; an
+    empty allowlist that must be edited deliberately is the point.
+    """
+    #: (agent, tool) pairs where naming another agent's tool is deliberate prose.
+    permitted: set[tuple[str, str]] = set()
+
+    bound = bound_tool_names()
+    misrouted = {
+        (name, tool)
+        for name, prompt, own in agent_bindings()
+        for tool in sorted((_named_in(prompt) & bound) - own)
+    } - permitted
+    assert not misrouted, (
+        f"prompts instruct tools their agent cannot call: {sorted(misrouted)}. "
+        f"Either bind the tool to that agent, stop naming it in the prompt, or "
+        f"add the pair to `permitted` above if it is prose about another agent."
     )
 
 

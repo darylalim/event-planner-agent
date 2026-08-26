@@ -4,10 +4,9 @@
 #
 #   HOOK_ROOT  project root
 #   HOOK_PATH  absolute, lexically normalized target path ("" if none)
-#   HOOK_CMD   the Bash command string ("" for non-Bash tools)
 #
 # Three behaviours worth knowing, each of which was a bypass before this file
-# existed and the four guards each parsed stdin their own way:
+# existed and the guards each parsed stdin their own way:
 #
 # * It reads `.tool_input.notebook_path` as well as `.tool_input.file_path`.
 #   NotebookEdit supplies the former, so a guard reading only file_path
@@ -35,7 +34,6 @@ fi
 _hook_input=$(cat)
 
 HOOK_ROOT=${CLAUDE_PROJECT_DIR:-$(printf '%s' "$_hook_input" | jq -r '.cwd // empty')}
-HOOK_CMD=$(printf '%s' "$_hook_input" | jq -r '.tool_input.command // empty')
 _hook_raw=$(printf '%s' "$_hook_input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty')
 
 # Lexical resolution is the correct kind here: the target may not exist yet

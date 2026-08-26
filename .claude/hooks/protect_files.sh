@@ -2,6 +2,16 @@
 # PreToolUse: the only write guard left. Two clauses, each defending something
 # with no other backstop anywhere in the repo.
 #
+# READ THIS FIRST: settings.json registers this hook under the matcher
+# "Write|Edit|NotebookEdit" and there is no Bash matcher any more (guard_bash.sh
+# was deleted -- correctly; it refused five of six benign commands). So both
+# clauses below stop a Write and nothing else. The `exit 0` splice the first
+# clause describes, and the .env clobber the second describes, are both
+# reachable through Bash today. That trade was made deliberately, on the grounds
+# that a guard inverted on both axes is worse than none, but it is a trade and
+# not a fix: what is left is a speed bump against the tool the model reaches for
+# first, not a boundary. See README.md, "What these do not cover".
+#
 # What used to be here and is not any more, with the reason:
 #
 #   uv.lock          git-tracked, so a hand-edit is one `git checkout` away, and
@@ -22,6 +32,13 @@
 #                    .github/workflows/ci.yml carried a stale cross-reference for
 #                    exactly that reason. It is also the file you must edit to
 #                    remove a hook.
+#                      Scope that argument carefully: it is about the `hooks`
+#                    key, which is the only key the file carries today. It does
+#                    NOT cover `permissions` or `env` -- a session that adds a
+#                    permission grant to this file is not writing something
+#                    inert. Nothing currently enforces that distinction; if
+#                    either key ever appears here, this clause comes back for
+#                    those keys.
 set -uo pipefail
 _hook_common="$(dirname "$0")/_common.sh"
 [ -r "$_hook_common" ] || {

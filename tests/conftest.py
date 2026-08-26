@@ -8,6 +8,7 @@ run without an API key or network access.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import pytest
@@ -36,6 +37,38 @@ class ScriptedModel(GenericFakeChatModel):
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         reply = self.responses.pop(0) if self.responses else AIMessage(content="done")
         return ChatResult(generations=[ChatGeneration(message=reply)])
+
+
+#: Backticked lowercase snake_case tokens. Subagent names (`venue-researcher`)
+#: carry hyphens and file paths (`/events/...`) start with a slash, so neither
+#: is picked up.
+BACKTICKED = re.compile(r"`([a-z_][a-z0-9_]*)`")
+
+
+def agent_bindings() -> list[tuple[str, str, set[str]]]:
+    """(name, system prompt, callable tool names) for the orchestrator and each
+    subagent.
+
+    Read from the same structures `build_agent` passes to `create_deep_agent`,
+    so the pairing cannot drift from what is actually bound. Lives here because
+    test_harness.py and test_security.py both need it and CLAUDE.md's rule
+    against two hand-maintained copies applies to tests as much as to source.
+    """
+    from event_planner.agent import ORCHESTRATOR_TOOLS
+    from event_planner.prompts import ORCHESTRATOR_PROMPT
+    from event_planner.subagents import SUBAGENTS
+
+    pairs = [("orchestrator", ORCHESTRATOR_PROMPT, {t.name for t in ORCHESTRATOR_TOOLS})]
+    pairs += [
+        (str(s["name"]), str(s.get("system_prompt", "")), {t.name for t in s.get("tools", [])})
+        for s in SUBAGENTS
+    ]
+    return pairs
+
+
+def bound_tool_names() -> set[str]:
+    """Every tool name the model can actually call, across all four agents."""
+    return {name for _, _, own in agent_bindings() for name in own}
 
 
 @pytest.fixture

@@ -3,8 +3,8 @@
 #
 # All three are configured in pyproject.toml and all three currently pass.
 # CLAUDE.md: "Both tools are clean; keep them that way rather than adding
-# suppressions." Measured cost: ruff check 29ms, ruff format --check 20ms,
-# ty 62ms scoped -- ~110ms total, against test_gate.sh's ~5.9s, and the two
+# suppressions." Measured cost: ruff check 20ms, ruff format --check 20ms,
+# ty 145ms scoped -- ~185ms total, against test_gate.sh's ~6.6s, and the two
 # run in parallel, so this hook is free on any edit that also runs the suite.
 # It is NOT free on streamlit_app.py, which test_gate.sh does not watch; that
 # is the one file where this hook is the only local feedback there is.
@@ -45,12 +45,27 @@ rel=${HOOK_PATH#"$HOOK_ROOT"/}
 # path re-probes the tool before framing its output as a result.
 runnable() { uvx "$1" --version >/dev/null 2>&1; }
 
+# --force-exclude on all three, and it is load-bearing. Naming a path on the
+# command line normally OVERRIDES the tool's own exclusions, and the guard above
+# admits anything under HOOK_ROOT -- which includes .venv/. Measured before this
+# flag: `ty check` whole-project said "All checks passed!" while
+# `ty check .venv/.../deepagents/middleware/filesystem.py` reported 17
+# diagnostics and `ruff check` on the same file reported 9. Editing a vendored
+# file to trace package behaviour -- which CLAUDE.md tells you to do when the
+# docs and the installed package disagree -- therefore blocked the edit with
+# findings against code the author does not own, under this hook's own
+# "Fix the finding rather than adding a suppression". That is the same
+# misattribution the `runnable` guard and the scoping below exist to prevent,
+# on a third axis. Both tools ship the flag for exactly this case (pre-commit
+# style runners that pass explicit paths); it makes an excluded file a no-op
+# exit 0 rather than a wall of other people's diagnostics.
+
 status=0
 infra=
 report=
 unformatted=0
 
-lint=$(uvx "$RUFF" check "$rel" 2>&1)
+lint=$(uvx "$RUFF" check --force-exclude "$rel" 2>&1)
 if [ $? -ne 0 ]; then
   if runnable "$RUFF"; then
     status=1
@@ -65,7 +80,7 @@ fi
 # hook that reformatted the file underneath an in-flight edit would race the
 # tool call that triggered it, and the model would be diffing against content
 # it never wrote. The fix is one command, printed below when this trips.
-fmt=$(uvx "$RUFF" format --check "$rel" 2>&1)
+fmt=$(uvx "$RUFF" format --check --force-exclude "$rel" 2>&1)
 if [ $? -ne 0 ]; then
   if runnable "$RUFF"; then
     status=1
@@ -82,16 +97,17 @@ fi
 # suppression" -- asserting a causal link the hook cannot support. That is the
 # same misattribution the `runnable` guard above exists to prevent, on a
 # different axis, and it lands hardest mid-refactor, where cross-file
-# diagnostics are expected and transient. Measured: 62ms scoped, 203ms not.
+# diagnostics are expected and transient. (Measured: 145ms scoped, 225ms not.
+# The speed was never the argument -- the misattribution is.)
 #
 # What scoping gives up is the caller you broke in another file. That is
-# covered, better, by test_gate.sh: 201 offline tests that import every module
+# covered, better, by test_gate.sh: 204 offline tests that import every module
 # and run on exactly the edits where cross-file breakage happens.
 #
 # ty infers its target from requires-python, so this checks against 3.11 (the
 # declared floor), not the 3.14 in .python-version. That is the useful
 # direction: it catches 3.12+ syntax that would break the claimed minimum.
-types=$(uvx "$TY" check "$rel" 2>&1)
+types=$(uvx "$TY" check --force-exclude "$rel" 2>&1)
 if [ $? -ne 0 ]; then
   if runnable "$TY"; then
     status=1

@@ -7,11 +7,11 @@ different property: not "does the feature work" but "does the boundary hold".
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import bound_tool_names
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -565,76 +565,20 @@ def test_every_irreversible_tool_is_gated():
 # --------------------------------------------------------------------------- #
 #
 # The three-file loop (tools/ -> agent.py -> prompts.py) drifts silently:
-# prompts.py names tools as literal strings, so a rename ships an agent
-# instructed to call something that does not exist and nothing catches it at
-# import time. These two checks used to live in .claude/hooks/check_prompt_drift.py
-# behind a PostToolUse trigger on five paths, plus a CI canary that planted
-# drift to prove the gate had run at all. As tests they need none of that: they
-# run on every path, in CI, and for a contributor without Claude Code.
-#
-# The hook's other two checks are deliberately NOT ported. Both keyed off the
-# same premise -- that a backticked snake_case token is a claimed call -- and
-# both refuse legitimate prose: "You never book. The orchestrator calls
-# `hold_venue`, which pauses for a human" was blocked, with a remedy suggesting
-# hold_venue be bound to the subagent. The two below have no such surface.
-
-#: Backticked lowercase snake_case tokens. Subagent names (`venue-researcher`)
-#: carry hyphens and file paths (`/events/...`) start with a slash, so neither
-#: is picked up.
-_BACKTICKED = re.compile(r"`([a-z_][a-z0-9_]*)`")
-
-
-def _bound_tool_names() -> set[str]:
-    """Every tool name the model can actually call, across all four agents."""
-    from event_planner.agent import ORCHESTRATOR_TOOLS
-    from event_planner.subagents import SUBAGENTS
-
-    names = {t.name for t in ORCHESTRATOR_TOOLS}
-    return names | {t.name for s in SUBAGENTS for t in s.get("tools", [])}
-
-
-def _named_anywhere() -> set[str]:
-    """Every snake_case token the model is shown, across prompts and skills.
-
-    Skills count as prompts here: workspace/skills/*/SKILL.md is loaded into
-    context at runtime and names tools in backticks the same way.
-    """
-    from event_planner.prompts import ORCHESTRATOR_PROMPT
-    from event_planner.subagents import SUBAGENTS
-
-    shown = [ORCHESTRATOR_PROMPT]
-    shown += [str(s.get("system_prompt", "")) for s in SUBAGENTS]
-    shown += [
-        p.read_text(encoding="utf-8") for p in sorted((WORKSPACE / "skills").glob("*/SKILL.md"))
-    ]
-    return {token for text in shown for token in _BACKTICKED.findall(text)}
-
-
-def test_every_bound_tool_is_named_somewhere():
-    """A tool the model was given but never told about is a rename that only
-    landed on one side of the loop.
-
-    Checked globally rather than per agent: the orchestrator legitimately names
-    only two of its seven tools and delegates the rest, so a per-agent version
-    reports five false positives on a healthy tree.
-    """
-    orphaned = _bound_tool_names() - _named_anywhere()
-    assert not orphaned, (
-        f"bound but named by no prompt or skill: {sorted(orphaned)}. Either the "
-        f"model is never told these exist, or a rename left the prompts naming "
-        f"the old spelling."
-    )
-
-
 def test_every_irreversible_tool_is_actually_bound():
     """`test_every_irreversible_tool_is_gated` cannot see this: it compares
     INTERRUPT_ON against the list INTERRUPT_ON is built from, so it holds by
     construction. A rename that leaves IRREVERSIBLE_TOOLS naming a tool nothing
     binds keys the approval gate to a tool that does not exist -- and the real
-    booking runs unreviewed."""
+    booking runs unreviewed.
+
+    Kept here, beside the gating test, rather than with the other prompt/tool
+    drift checks in test_harness.py: what it protects is the approval gate, and
+    an ungated booking is a boundary failure.
+    """
     from event_planner.tools import IRREVERSIBLE_TOOLS
 
-    ungated = set(IRREVERSIBLE_TOOLS) - _bound_tool_names()
+    ungated = set(IRREVERSIBLE_TOOLS) - bound_tool_names()
     assert not ungated, (
         f"IRREVERSIBLE_TOOLS names unbound tools: {sorted(ungated)}. INTERRUPT_ON "
         f"is derived from that list, so the gate is keyed to nothing."

@@ -16,7 +16,7 @@ what you need to *change code* safely.
 uv sync                                    # install (uv required; .python-version pins 3.14)
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 203 tests, ~6s, fully offline
+uv run pytest                              # 204 tests, ~6s, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -153,7 +153,9 @@ Changing behaviour usually touches all three, and they drift silently:
 - `prompts.py` names tools (`search_venues`, `estimate_budget`) and file paths
   (`/events/<event-slug>/brief.md`) as literal strings. Renaming a tool or restructuring
   paths without updating prompts produces an agent instructed to call something that
-  doesn't exist. Nothing catches this at import time.
+  doesn't exist. Nothing catches this at import time — the three drift tests below do,
+  at test time. Path drift is still uncovered: nothing checks that `/events/...` in a
+  prompt matches what `build_backend()` routes.
 - `tools/` signatures are the contract prompts are written against. Keep them stable when
   swapping stubs for real backends.
 - `subagents.py` — subagents do **not** inherit the orchestrator's skills. Each lists its
@@ -173,6 +175,26 @@ returning an agent whose approval gates don't gate. Only `hosted=True` suppresse
 **Approval-gated tools come from one list.** `IRREVERSIBLE_TOOLS` in `tools/__init__.py`
 is the source; `INTERRUPT_ON` is derived from it. A new money-spending or guest-contacting
 tool goes in that list — never in two hand-maintained copies.
+
+**A tool rename must land on every side of the three-file loop, and three tests say so.**
+They were a PostToolUse hook (`check_prompt_drift.py`) until it was pruned; as tests they
+run in CI, on all four Python versions, and for a contributor without Claude Code.
+`test_every_bound_tool_is_named_somewhere` catches a tool the model was given but never
+told about, checked **globally** — the orchestrator names only two of its seven tools and
+delegates the rest, so a per-agent version reports five false positives.
+`test_no_prompt_instructs_a_tool_its_agent_cannot_call` is its complement and catches what
+a global check structurally cannot: binding is **per agent**, so budget-analyst's prompt
+naming `hold_venue` passes the first test (bound somewhere, named somewhere) while the
+subagent burns a turn on a tool it was never given. Its `permitted` allowlist is empty and
+must be edited deliberately — prose that names another agent's tool goes there with the
+sentence that justifies it, rather than the check being deleted. Both live in
+`test_harness.py`, whose docstring already claims this ground.
+`test_every_irreversible_tool_is_actually_bound` stays in `test_security.py` beside
+`test_every_irreversible_tool_is_gated`, which cannot see it: that one asserts
+`set(INTERRUPT_ON) == set(IRREVERSIBLE_TOOLS)` and `INTERRUPT_ON` is built from
+`IRREVERSIBLE_TOOLS`, so it holds by construction. The shared helpers (`BACKTICKED`,
+`agent_bindings`, `bound_tool_names`) live in `conftest.py` — one copy, since the rule
+against two hand-maintained copies applies to tests too.
 
 **`respond` is excluded from `ALLOWED_DECISIONS`.** Only `approve`/`edit`/`reject`. A
 free-text reply to a booking request invites the model to read commentary as confirmation.

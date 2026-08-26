@@ -9,11 +9,13 @@
 #   pytest               test_gate.sh
 #
 # Prompt/tool drift was a bespoke hook (check_prompt_drift.py) plus a canary
-# step here that planted drift to prove the gate had run at all. It is now two
+# step here that planted drift to prove the gate had run at all. It is now three
 # ordinary tests — test_every_bound_tool_is_named_somewhere and
-# test_every_irreversible_tool_is_actually_bound in tests/test_security.py — so
-# the `test` job covers it on every supported Python, and pytest reporting a
-# pass is already proof it ran. No canary needed.
+# test_no_prompt_instructs_a_tool_its_agent_cannot_call in tests/test_harness.py,
+# and test_every_irreversible_tool_is_actually_bound in tests/test_security.py —
+# so the `test` job covers it on every supported Python, and pytest reporting a
+# pass is already proof it ran. No canary needed. The `static` job below is
+# named for what it runs; drift is not part of it.
 #
 # It does NOT stand in for protect_files.sh, the one remaining PreToolUse
 # guard, which blocks writes rather than inspecting them. Nothing here
@@ -48,7 +50,7 @@ env:
 
 jobs:
   static:
-    name: lint · format · types · drift
+    name: lint · format · types
     runs-on: ubuntu-latest
     # The slowest step here is the install; the checks are milliseconds. This
     # is a stuck-runner backstop, not a budget.
@@ -91,9 +93,10 @@ jobs:
           grep -q "TY=\"$TY\"" .claude/hooks/lint_gate.sh
 
       # --locked fails when uv.lock is stale against pyproject.toml instead of
-      # silently re-resolving. The two checks below need the environment: ty
-      # resolves third-party imports through .venv, and the drift check imports
-      # the agent to read the tool bindings it actually has.
+      # silently re-resolving. The one check below needs the environment: ty
+      # resolves third-party imports through .venv. (The drift check used to
+      # need it too, for the same reason — it imports the agent to read the tool
+      # bindings it actually has — but it lives in the `test` job now.)
       - name: Install (locked)
         id: sync
         run: uv sync --locked
