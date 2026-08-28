@@ -77,10 +77,17 @@ in the browser on the same thread.
 
 ## Releases
 
-Bump `version` in `pyproject.toml` and push to main. `.github/workflows/release.yml`
-waits for CI to go green on that commit, then tags `v<version>` and publishes a
-GitHub release with generated notes. Nothing else is a trigger — not a tag you
-push, not an edit to `pyproject.toml` that leaves the version alone.
+Bump `version` in `pyproject.toml`, run `uv lock`, and push to main.
+`.github/workflows/release.yml` waits for CI to go green on that commit, then
+tags `v<version>` and publishes a GitHub release with generated notes. Nothing
+else is a trigger — not a tag you push, not an edit to `pyproject.toml` that
+leaves the version alone.
+
+The `uv lock` is not optional and it fails in the quiet direction. `uv.lock`
+records the project's own version alongside every dependency, so a bare bump
+makes `uv sync --locked` exit with *"The lockfile at `uv.lock` needs to be
+updated"* in all six CI jobs — and a red CI run emits no `workflow_run` success,
+so the release does not fail, it simply never happens.
 
 The gate asks *"does the version at this commit have a tag yet?"*, not *"did this
 push change pyproject.toml?"*. Every diff-shaped alternative breaks on some push
