@@ -228,8 +228,9 @@ raises rather than handing back an agent whose approval gates don't gate. Pass
 ### Step budget
 
 LangGraph counts every node as a super-step, and this harness runs five
-middleware nodes per model turn — three `before_agent` (Skills, PatchToolCalls,
-Memory) and two `after_model` (HumanInTheLoop, TodoList). Measured against the
+middleware nodes at two different rates — three `before_agent` (Skills,
+PatchToolCalls, Memory) once per invocation, and two `after_model`
+(HumanInTheLoop, TodoList) on every model call. Measured against the
 live model, a single tool round trip costs about **4 steps**, not the 2 you'd
 expect from `model → tools`:
 

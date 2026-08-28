@@ -164,7 +164,7 @@ jobs:
 
   # `langgraph.json` declares `"dependencies": ["."]` — a plain install, no
   # extras and no dev group — while every job above runs `uv sync --locked`,
-  # which pulls the dev group and with it streamlit: 95 packages against 66.
+  # which pulls the dev group and with it streamlit: 98 packages against 65.
   # So a module-scope `import streamlit` anywhere in src/ passes ruff, ty and
   # all four pytest legs, and breaks only the deployed graph.
   #

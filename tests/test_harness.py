@@ -260,9 +260,11 @@ def test_pending_approval_survives_a_process_restart(scripted, tmp_path):
 def test_step_budget_survives_a_long_planning_session(scripted):
     """Every middleware node counts as a LangGraph super-step.
 
-    This harness runs five middleware nodes per model turn, so a tool round
-    trip costs far more than the two steps (model + tools) you would expect —
-    measured live, not guessed. `DEFAULT_MAX_STEPS` is a ceiling rather than a
+    This harness runs five middleware nodes — three `before_agent` once per
+    invocation, two `after_model` on every model call (see `_FIXED_OVERHEAD`
+    above) — so a tool round trip costs far more than the two steps
+    (model + tools) you would expect — measured live, not guessed.
+    `DEFAULT_MAX_STEPS` is a ceiling rather than a
     rescue from LangGraph's default of 25: `create_deep_agent` binds
     `recursion_limit: 9_999` onto the graph, so 25 never applies here.
 

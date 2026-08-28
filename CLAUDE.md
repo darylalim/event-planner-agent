@@ -43,14 +43,18 @@ uvx ty check                               # types — config in pyproject.toml,
 ```
 
 **Three Claude Code hooks are live**, configured in `.claude/settings.json`; the scripts and
-their full rationale are in `.claude/hooks/README.md`. PreToolUse `protect_files.sh` **blocks**
-a Write/Edit to `.env*` (not `.env.example`) and to `.claude/hooks/` itself, so changing a guard
+their full rationale are in `.claude/hooks/README.md`. All three share the matcher
+`Write|Edit|NotebookEdit` — a notebook write is gated exactly as a plain one is, which an
+earlier bypass in this repo got wrong. PreToolUse `protect_files.sh` **blocks** such a write to
+`.env*` (not `.env.example`) and to `.claude/hooks/` itself, so changing a guard
 is an operator action taken outside a session — it deliberately does *not* guard
 `settings.json`, which is where a hook is removed. PostToolUse `lint_gate.sh` runs ruff and ty
 on any edited `.py` (~185 ms), and `test_gate.sh` runs the whole suite after an edit under
-`src/event_planner/`, `tests/`, `pyproject.toml` or `uv.lock` (~6.6 s); both exit 2, so their
-findings arrive as tool feedback rather than as a silently passing edit. Hook *config* is
-snapshotted at session start, while the hook *scripts* are re-read from disk on every call.
+`src/event_planner/`, `tests/`, `pyproject.toml` or `uv.lock` (~6 s — the figures in that
+script's header are deliberately not re-measured, so treat them as an order of magnitude).
+Both exit 2, so their findings arrive as tool feedback rather than as a silently passing
+edit. Hook *config* is snapshotted at session start, while the hook *scripts* are re-read
+from disk on every call.
 None of them see Bash — a shell redirect reaches nothing here.
 
 **The lint and type versions are pinned in two files that must agree.**
@@ -83,29 +87,28 @@ in `src/` passes ruff, ty and all four pytest legs while breaking only the deplo
 That job installs `--no-dev --no-editable`, asserts streamlit is *absent* — without which
 it would pass vacuously the moment `--no-sync` came off — imports `agent`, `cli` and
 `webui`, and then asserts the installed copy resolves its skills and refuses a write to
-its shared root. Those last two are the ones pytest structurally cannot make: a checkout
+its shared root. The *skills* assertion is the one pytest structurally cannot make: a checkout
 cannot tell a package-relative root from one derived by counting levels up from
 `__file__`, because in a checkout both land on a real directory. Only an installed copy
-separates them, and this job is the only place that exists.
+separates them, and this job is the only place that exists. The write refusal is not in that
+class — `test_the_real_shared_root_refuses_a_write` makes it in a plain checkout, and the job
+re-asserts it against the installed copy.
 
-`.streamlit/config.toml` is committed app configuration and carries its own rationale in
-comments — read them before changing the bind or the theme (both are load-bearing: the theme
-must define `[theme.light]` *and* `[theme.dark]`, and `primaryColor` is contrast-measured
-against white button text). Two things about the file are not in it. **Streamlit resolves it
-from the CWD, not the script's directory**, so it is a property of being launched from the repo
-root rather than of the app; `streamlit_app.py` re-checks `server.address` at runtime and warns
-in the page when the bind is not loopback, because a config file cannot enforce itself — and
-that matters because the page has no authentication, "User id" being a free-text field. And
-pytest runs from the repo root too, so `AppTest` **does** read this file: `server.*` is inert
-with no server started, but a `runner.*` or `global.*` key added here changes how the suite
-executes. `.streamlit/secrets.toml` is gitignored; credentials stay in `.env`.
+`.streamlit/config.toml` is committed app configuration and its header carries the rationale —
+read it before changing the bind or the theme. It already covers CWD resolution (the file
+applies only when launched from the repo root, and **`pytest` reads it too**, so a `runner.*` or
+`global.*` key added there changes how the suite executes), why the bind matters with no
+authentication in front of the page, and why the theme needs both `[theme.light]` and
+`[theme.dark]`. The one thing not in it: a config file cannot enforce itself, so
+`streamlit_app.py` re-checks `server.address` at runtime and warns in the page when the bind is
+not loopback. `.streamlit/secrets.toml` is gitignored; credentials stay in `.env`.
 
 Ruff is configured in `pyproject.toml` but is **not** a dependency — run it with
 `uvx ruff check .`. The rule set is chosen so the `# noqa` codes in the source
 (`BLE001` on the five deliberate blind excepts — three under `src/`, two in
-`streamlit_app.py`) suppress rules that are actually enabled; `RUF100` fails the check if
-one goes stale. `ANN401` is ignored because `Any`
-is honest at the deepagents/langgraph boundary, and `tests/*` ignores `ANN`/`RUF012`
+`streamlit_app.py`) suppress rules that are actually enabled; `RUF100` fails the check if one
+goes stale. `ANN401` is ignored because `Any` is honest at the deepagents/langgraph
+boundary, and `tests/*` ignores `ANN`/`RUF012`
 (the fake models are Pydantic subclasses, so their list defaults are fields, not shared
 state). Formatting **is** enforced — run `uvx ruff format` before committing; CI runs
 `uvx ruff format --check .`. It was adopted after the fact, so the reformat that made
@@ -184,11 +187,14 @@ on the import path, and a writable `/skills/` lets whatever `web_search` returns
 the guidance every tenant's next session loads. Nothing legitimate writes there — every
 write the prompts ask for is routed.
 
-`virtual_mode=True` is the **read** half of that same boundary and is easy to drop, because
-the table above describes only the write half. Without it, deepagents documents the backend as
-letting an absolute path bypass `root_dir` entirely and a relative `..` escape it — so the
-agent's `ls`/`read_file`/`glob`/`grep` reach the repo's own source and anything else on disk.
-No test asserts `build_backend()` sets it; flipping it breaks nothing visible.
+`virtual_mode=True` is the **read** half of that same boundary, and the table above describes
+only the write half. Under `virtual_mode=False` deepagents documents the backend as letting an
+absolute path bypass `root_dir` entirely and a relative `..` escape it, so the agent's
+`ls`/`read_file`/`glob`/`grep` would reach the repo's own source and anything else on disk. Be
+precise about the hazard: 0.7.9 already **defaults** it to `True`, so deleting the keyword is a
+no-op today. It is passed explicitly because that default is deepagents' to change, and because
+no test asserts `build_backend()` sets it — a release that flipped it would break nothing
+visible here.
 
 Two tests hold the write half:
 `test_the_read_only_root_refuses_every_mutator` drives all eight methods and checks the
@@ -217,18 +223,21 @@ the agent at runtime — they're behaviour, not documentation.
 
 ## Invariants that fail silently
 
-Each is enforced by a test; breaking one usually produces working-looking code.
+Each is enforced by a test except where it says otherwise; breaking one usually produces
+working-looking code.
 
 **`interrupt_on` is a no-op without a checkpointer.** `build_agent` raises rather than
 returning an agent whose approval gates don't gate. Only `hosted=True` suppresses this.
 
-**A `store` is required too, and only the checkpointer is guarded.** With a checkpointer
-alone `build_agent` constructs fine and then dies on the first invoke — `AttributeError:
-'NoneType' object has no attribute 'get'`, raised inside `MemoryMiddleware.before_agent`,
-because `memory=["/memories/AGENTS.md"]` downloads through `StoreBackend`. Every real call
-site passes one (`cli.py`; `tests/test_harness.py`'s `_agent` defaults to `InMemoryStore()`),
-so a new entry point, repro script, or test must too — the failure names neither `store` nor
-`build_agent`.
+**A `store` is required too, and — alone in this section — no test enforces it.** With a
+checkpointer alone `build_agent` constructs fine and then dies on the first invoke:
+`AttributeError: 'NoneType' object has no attribute 'get'`, from `store.get(namespace, path)`
+inside `MemoryMiddleware.before_agent`, because `memory=["/memories/AGENTS.md"]` downloads
+through `StoreBackend`. Every real call site passes one (`cli.py`, `streamlit_app.py`, and
+`tests/test_harness.py`'s `_agent`, which defaults to `InMemoryStore()`), so a new entry point,
+repro script, or test must too — nothing in that traceback names `build_agent` or its `store=`
+parameter. The guard belongs beside the checkpointer's in `build_agent`; until it is written,
+this bullet is what stands in for it.
 
 **Approval-gated tools come from one list.** `IRREVERSIBLE_TOOLS` in `tools/__init__.py`
 is the source; `INTERRUPT_ON` is derived from it. A new money-spending or guest-contacting
@@ -257,8 +266,11 @@ as a tool error and retry. `webui.SUPPORTED_DECISIONS` holds the same three and 
 anything else as unsupported rather than rendering it.
 
 **Two front ends can refuse a booking, and they must do it identically.** `webui.py` imports
-everything shared from `cli.py` rather than restating it — its module docstring carries the
-list and the reasons. Identity, not equivalence: the re-exports are the CLI's own objects and
+everything shared from `cli.py` rather than restating it — nine names: `_decline_message`,
+`_check_db_outside_workspace`, `UnsafeDatabaseLocation`, `credentials_problem`,
+`checkout_warning`, `degraded_capability_note`, `DEFAULT_MAX_STEPS`, and `_stored`/`_brief_args`.
+Its module docstring gives the reasons for five of them; the other four are recorded only here.
+Identity, not equivalence: the re-exports are the CLI's own objects and
 `test_the_shared_helpers_are_the_clis_own_objects` asserts it. The wording of a refusal is
 behavioural, not cosmetic, and a divergent copy would surface only as a booking retried after
 a human said no; `test_reject_matches_the_cli_byte_for_byte` and `test_edit_matches_the_cli`
@@ -411,7 +423,8 @@ super-step, and the two kinds of middleware node do not run at the same rate: th
 `before_agent` nodes (Skills, PatchToolCalls, Memory) run **once per invocation**, the two
 `after_model` nodes (HumanInTheLoop, TodoList) run **per model call**. That asymmetry is what
 `6 + 4N` encodes — counting all five per turn predicts 13 steps for one round trip against the
-10 measured, and `test_harness.py`'s comment warns against exactly that misreading. README's
+10 measured. `test_harness.py`'s `_FIXED_OVERHEAD` comment records the correct decomposition.
+README's
 "Step budget" has the trace, and explains why the front ends' `DEFAULT_MAX_STEPS = 200`
 *lowers* `create_deep_agent`'s `recursion_limit: 9_999` rather than raising LangGraph's
 default 25. Adding middleware changes this constant —

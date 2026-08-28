@@ -71,7 +71,8 @@ def checkout_warning() -> str | None:
 STATE_DIR = PROJECT_ROOT / ".state"
 
 #: LangGraph counts every node as a super-step, and this harness runs five
-#: middleware nodes per model turn (three `before_agent`, two `after_model`).
+#: middleware nodes at two different rates: three `before_agent` once per
+#: invocation, two `after_model` on every model call.
 #: Measured against the live model, one tool round trip costs ~4 steps, so a
 #: planning session that shortlists venues, checks dates, prices catering and
 #: delegates to subagents needs room for dozens of them.
