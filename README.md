@@ -31,6 +31,16 @@ floor, while `.python-version` pins *development* to 3.14 so every checkout
 builds the same environment. `uv sync` provisions the pinned interpreter
 automatically; change it with `uv python pin <version>`.
 
+uv itself is pinned too, by `[tool.uv] required-version` in `pyproject.toml`.
+`astral-sh/setup-uv` reads that key, so one line pins the CI runner and your
+checkout alike — and a mismatch is a hard error naming the version rather than a
+silent split between what your machine checks and what CI does. If `uv sync`
+greets you with *"Required uv version `==0.12.5` does not match the running
+version"*, that is this, working as intended — `uv self update 0.12.5` puts you
+back in step. It gates the project-aware commands only; `uvx ruff` and
+`uv self update` are deliberately untouched, the latter so the way out is never
+the thing being blocked.
+
 ```bash
 uv sync
 cp .env.example .env   # then fill in ANTHROPIC_API_KEY
@@ -64,6 +74,36 @@ their event files to `exports/`, and `/exit` quits.
 Both front ends read the same `.env` and share `.state/planner.sqlite` unless
 `EVENT_PLANNER_DB` points elsewhere, so a plan started in the terminal resumes
 in the browser on the same thread.
+
+## Releases
+
+Bump `version` in `pyproject.toml` and push to main. `.github/workflows/release.yml`
+waits for CI to go green on that commit, then tags `v<version>` and publishes a
+GitHub release with generated notes. Nothing else is a trigger — not a tag you
+push, not an edit to `pyproject.toml` that leaves the version alone.
+
+The gate asks *"does the version at this commit have a tag yet?"*, not *"did this
+push change pyproject.toml?"*. Every diff-shaped alternative breaks on some push
+shape and breaks silently: `HEAD~1` misses a bump in the middle commit of a
+multi-commit push, and `github.event.before` is unreachable after a force-push and
+is replayed verbatim on a re-run. Asking about the tag is correct on all of them,
+and makes re-runs, reverts, and no-op edits no-ops for one reason rather than three.
+
+It is a separate workflow rather than a third job in `ci.yml` so that file keeps
+`permissions: contents: read` and the README badge keeps reporting lint, types and
+tests rather than release outcomes. The cost is `workflow_run`, whose edges are
+recorded in the file: `github.sha` is the branch tip rather than the commit CI
+tested, the workflow only ever runs from main's copy of itself, and a tag pushed
+with `GITHUB_TOKEN` triggers no further workflows.
+
+Releases carry no build artifacts, deliberately. `PROJECT_ROOT` in `agent.py` is
+`Path(__file__).resolve().parents[2]`, which is the repo root from a source
+checkout and `<venv>/lib` from an installed wheel — and `workspace/` is not in the
+wheel at all, so a wheel user would get an agent whose skills silently resolve to
+nothing, with no error. Fix that before attaching a wheel or publishing to PyPI.
+
+If you delete a release but leave its tag, the gate will say "already released"
+for good; the workflow's `workflow_dispatch` trigger is the recovery path.
 
 ## Architecture
 

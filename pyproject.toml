@@ -46,6 +46,24 @@ dev = [
     "event-planner-agent[web]",
 ]
 
+[tool.uv]
+# uv is the one tool this project's CI did not pin, having pinned ruff, ty and
+# both action SHAs on the argument that an upstream release must not redden CI
+# on code nobody touched — while leaving it live for the tool that resolves the
+# lockfile and provisions every interpreter. `astral-sh/setup-uv` with no
+# `version:` input reads this key (verified in action.yml at the pinned SHA), so
+# one copy pins the runner and the checkout alike.
+#
+# Measured scope, because "every uv command" would be wrong: this gates the
+# project-aware ones — `uv sync`, `uv run`, `uv lock`, `uv pip` — with "Required
+# uv version `==0.12.5` does not match the running version", which is every
+# runnable line in CLAUDE.md's Commands block except the three `uvx` ones. Tool
+# runs are NOT gated: `uvx ruff@0.16.1` works on any uv, so this and the ruff/ty
+# pins do not overlap. Nor is `uv self update`, which is deliberate — it is how
+# a contributor gets back in step. Bump this alongside the two pins in
+# .claude/hooks/lint_gate.sh rather than by drifting into it.
+required-version = "==0.12.5"
+
 # Ruff is deliberately NOT a dependency — run `uvx ruff check .` and
 # `uvx ruff format`. Both are enforced by CI (.github/workflows/ci.yml), which
 # runs `format --check`; the tree was formatted in the commit that added that

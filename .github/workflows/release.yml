@@ -1,0 +1,139 @@
+# Cuts a release when the version in pyproject.toml reaches main untagged.
+#
+# Deliberately a separate file rather than a third job in ci.yml, so that
+# workflow keeps `permissions: contents: read` and a header that says no job
+# writes to the repo, and so the README badge keeps reporting lint/types/tests
+# rather than release outcomes. The cost of that separation is `workflow_run`,
+# which has three sharp edges — all three are handled below and none of them
+# goes red on its own:
+#
+#   1. `github.sha` is the DEFAULT BRANCH TIP, not the commit the triggering run
+#      tested. Checking out the default would tag whatever landed since.
+#   2. It only ever runs from the default branch's copy of this file, so a
+#      change here cannot be tested on a branch. Merge, then use the
+#      `workflow_dispatch` button.
+#   3. A tag pushed with GITHUB_TOKEN does NOT trigger further workflows. This
+#      file is self-contained so that does not matter today; anything added
+#      later on `push: tags` or `release: published` will simply never fire.
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# No concurrency group, deliberately, and that is the opposite of what looks
+# safe. GitHub cancels a PENDING run when a third joins the group, so a shared
+# group would drop the middle of three bumps pushed in quick succession with
+# nothing red to show for it — a version silently never released, which is the
+# worst failure available here. Racing runs need no group: the gate below is
+# idempotent, and two that get past it for the same version still cannot
+# produce a wrong release, because the loser's `gh release create` fails on a
+# release that already exists.
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: tag · release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Both arms need a branch guard, for mirror-image reasons. `event == 'push'`
+    # because CI also runs on `pull_request`, and a PR opened from a branch
+    # called `main` satisfies the `branches:` filter above — that is what would
+    # otherwise let a fork's contents be tagged as ours. And `github.ref` on the
+    # dispatch arm because workflow_dispatch lets the operator pick any ref:
+    # without it, a dispatch from a feature branch tags unreviewed code AND
+    # burns that version number for good, since the gate would then find it
+    # already tagged and main could never release it.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      || (github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push')
+    # Job-level permissions REPLACE the workflow-level block rather than merging
+    # with it, so this is the complete grant: enough to create a tag and a
+    # release, and nothing else.
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # So `gh` resolves the repository from the environment rather than from
+      # the checkout's git remote, which the next step deliberately strips.
+      GH_REPO: ${{ github.repository }}
+      # Edge 1, resolved once. The commit the gate reads pyproject.toml at and
+      # the commit the tag lands on must be the same one, and two copies of this
+      # expression are two chances for them to drift apart with nothing to go
+      # red. Empty under workflow_dispatch, where github.sha is the ref the
+      # operator chose and is already correct.
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+          # Both writes below go through the API on GH_TOKEN, never through git,
+          # so the credential actions/checkout would leave in .git/config has no
+          # consumer here either.
+          persist-credentials: false
+
+      # The gate asks "does the version at this commit have a tag yet?", NOT
+      # "did this push change pyproject.toml?". Every diff-shaped alternative
+      # breaks on some push shape and breaks silently: `HEAD~1` misses a bump in
+      # the middle commit of a multi-commit push, and `github.event.before` is
+      # unreachable after a force-push and is replayed verbatim on a re-run.
+      # This question is correct on all of them, and costs one API call.
+      #
+      # `matching-refs` rather than `git/ref`, because it answers 200 with an
+      # array where `git/ref` answers 404 — so `if gh api ... >/dev/null 2>&1`
+      # cannot tell "no such tag" from a rate-limit 403 or a 5xx, and would read
+      # a broken API as "not released yet" and go on to release. Here an API
+      # failure aborts the assignment under `set -e` instead. It does prefix
+      # match (v7.0 finds v7.0.0 and v7.0.1), hence the exact comparison.
+      - name: Is this version already released?
+        id: gate
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')
+          case "$version" in
+            '' | *[!0-9A-Za-z.+-]*) echo "implausible version: $version" >&2; exit 1 ;;
+          esac
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          refs=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" --jq '.[].ref')
+          if printf '%s\n' "$refs" | grep -qxF "refs/tags/$tag"; then
+            echo "$tag is already tagged — nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$tag is not tagged yet — releasing."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # The charset check above admits PEP 440 spellings like 0.2.0rc1, and
+          # `gh release create` would make one of those the repository's latest
+          # release. Anything that is not plain dotted-numeric is marked a
+          # pre-release instead — conservative in the safe direction.
+          if [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # One call creates the tag AND the release, at the commit CI verified.
+      #
+      # Deleting a release while leaving its tag makes the gate above say
+      # "already released" for good; `workflow_dispatch` is the recovery path,
+      # and it is why that trigger is not optional here.
+      - name: Tag and release
+        if: steps.gate.outputs.release == 'true'
+        env:
+          TAG: ${{ steps.gate.outputs.tag }}
+          PRERELEASE: ${{ steps.gate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          args=(--target "$SHA" --title "$TAG" --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${args[@]}"

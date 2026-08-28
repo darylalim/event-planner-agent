@@ -110,7 +110,11 @@ hook returning `0` proves nothing while pytest reporting a pass proves it ran.
 
 `.github/workflows/ci.yml` runs `ruff check`, `ruff format --check`, `ty check`
 and `pytest`, so a contributor without Claude Code gets this feedback on a pull
-request rather than not at all. Two things about that pairing are worth knowing:
+request rather than not at all. It also runs one check with no local
+counterpart at all — the `deploy-shape` job, which installs the package the way
+`langgraph.json` deploys it (`--no-dev --no-editable`) and imports the graph, so
+a module-scope `import streamlit` in `src/` cannot pass every other gate and
+break only the deployment. Two things about that pairing are worth knowing:
 
 **`protect_files.sh` has no CI counterpart.** It blocks writes rather than
 inspecting them, and a pull request has no equivalent. A PR is not a control
@@ -120,8 +124,12 @@ effect on the next tool call.
 
 **The pins are asserted, not documented.** `ci.yml` pins `ruff@0.16.1` and
 `ty@0.0.65` in `env:` and its `static` job greps `lint_gate.sh` to fail when the
-two disagree. Keep the `RUFF="..."` / `TY="..."` spelling in that file; the
-canary matches on it.
+two disagree. That grep is `-qxF`, so the contract is stricter than "keep the
+spelling": each line must be *exactly* `RUFF="ruff@0.16.1"` and
+`TY="ty@0.0.65"` — no `export`, no trailing comment, nothing else on the line.
+It is anchored because an unanchored match is satisfied by a commented-out
+`# was RUFF="..."` line, which this directory's own documentary style makes
+likely.
 
 ## What these do not cover
 

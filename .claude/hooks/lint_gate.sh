@@ -24,7 +24,9 @@ _hook_common="$(dirname "$0")/_common.sh"
 # .github/workflows/ci.yml pins the same two versions and its `static` job
 # greps THIS file to fail when the two disagree, so bumping one and forgetting
 # the other is caught rather than silently splitting local and CI behaviour.
-# Keep the `RUFF="..."` / `TY="..."` spelling below; that canary matches on it.
+# It matches whole lines (`grep -qxF`), so the two assignments below must stay
+# exactly as written -- no `export`, no trailing comment, nothing else on the
+# line -- or CI reds pointing at the pin value rather than at the real cause.
 RUFF="ruff@0.16.1"
 TY="ty@0.0.65"
 

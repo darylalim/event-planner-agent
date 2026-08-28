@@ -8,19 +8,9 @@
 #                                        whole-project here
 #   pytest               test_gate.sh
 #
-# Prompt/tool drift was a bespoke hook (check_prompt_drift.py) plus a canary
-# step here that planted drift to prove the gate had run at all. It is now three
-# ordinary tests — test_every_bound_tool_is_named_somewhere and
-# test_no_prompt_instructs_a_tool_its_agent_cannot_call in tests/test_harness.py,
-# and test_every_irreversible_tool_is_actually_bound in tests/test_security.py —
-# so the `test` job covers it on every supported Python, and pytest reporting a
-# pass is already proof it ran. No canary needed. The `static` job below is
-# named for what it runs; drift is not part of it.
-#
 # It does NOT stand in for protect_files.sh, the one remaining PreToolUse
-# guard, which blocks writes rather than inspecting them. Nothing here
-# reproduces it: a pull request is not a control over a local `.env` clobber,
-# and a session that neuters a guard script takes effect on the next tool call.
+# guard, which blocks writes rather than inspecting them. .claude/hooks/README.md
+# records why a pull request has no equivalent.
 name: CI
 
 on:
@@ -60,13 +50,28 @@ jobs:
       # upstream's own README uses. Not a major-only ref: setup-uv publishes
       # v9.0.0 but no floating v9, so `@v9` fails to resolve and every job
       # aborts before doing any work. A SHA also cannot be force-moved.
+      #
+      # persist-credentials: false because nothing here uses git after the
+      # checkout — no push, no tags, no submodules, and hatchling reads a static
+      # version. The default writes the job's GITHUB_TOKEN into .git/config as an
+      # http.extraheader, and the steps below then run third-party build backends
+      # (`uv sync`) and tool installs (`uvx`) in that same workspace.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # No python-version here: uv reads .python-version (3.14) and provisions
       # that interpreter itself. Caching needs no configuration — enable-cache
       # defaults to "auto", which resolves to true on GitHub-hosted runners,
       # and the default cache-dependency-glob already covers uv.lock.
+      #
+      # `id:` because `Format` and `Install` below run on `!cancelled()`, so one
+      # red check cannot hide the next — but that alone would also run them with
+      # no repo and no uv, and `ruff format --check` on an empty tree exits 0.
+      # This step is `success()`-gated, so gating on it covers both
+      # prerequisites at once.
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        id: setup
 
       # Both ruff steps run BEFORE the install, deliberately: ruff goes through
       # uvx in an isolated environment and never touches .venv. A stale
@@ -78,27 +83,37 @@ jobs:
       # --check never writes; it exits non-zero on any file `ruff format` would
       # change. Runs even when the linter is red so one cannot hide the other.
       - name: Format (ruff)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: uvx "$RUFF" format --check .
 
-      # The pins in `env:` are a second copy of lint_gate.sh's. Two
-      # hand-maintained copies drift, and the failure mode is the round trip
-      # this workflow exists to prevent: the local gate formats under one ruff,
-      # CI checks under another, and a PR reds on code the author's hook just
-      # called clean. Assert instead of asking a comment to hold the line.
+      # The `env:` pins are a second copy of lint_gate.sh's, and two
+      # hand-maintained copies drift into the round trip this workflow exists to
+      # prevent: the local gate formats under one ruff, CI checks under another.
+      # `ruff format --check` above is not a fallback — 0.16.1 and 0.16.5 format
+      # this tree identically, so ruff drift stays green; ty, pre-1.0 with a
+      # moving diagnostic set, is what this really guards. -x -F because an
+      # unanchored match also passes on a commented-out `# was RUFF="..."` line,
+      # and both pins report before exiting, so a double mismatch costs one run.
+      #
+      # `!cancelled()` alone, deliberately not gated on setup-uv like its
+      # neighbours: this is a grep that needs neither uv nor the network, and a
+      # setup flake should not also cost the one check written to catch a
+      # drifted pin. The unreadable-file branch covers the no-checkout case.
       - name: Tool pins match the local gate
         if: ${{ !cancelled() }}
         run: |
-          grep -q "RUFF=\"$RUFF\"" .claude/hooks/lint_gate.sh
-          grep -q "TY=\"$TY\"" .claude/hooks/lint_gate.sh
+          hook=.claude/hooks/lint_gate.sh
+          [ -r "$hook" ] || { echo "cannot read $hook" >&2; exit 1; }
+          grep -qxF "RUFF=\"$RUFF\"" "$hook" || { echo "$hook disagrees with RUFF=$RUFF" >&2; bad=1; }
+          grep -qxF "TY=\"$TY\"" "$hook" || { echo "$hook disagrees with TY=$TY" >&2; bad=1; }
+          [ -z "${bad:-}" ]
 
       # --locked fails when uv.lock is stale against pyproject.toml instead of
       # silently re-resolving. The one check below needs the environment: ty
-      # resolves third-party imports through .venv. (The drift check used to
-      # need it too, for the same reason — it imports the agent to read the tool
-      # bindings it actually has — but it lives in the `test` job now.)
+      # resolves third-party imports through .venv.
       - name: Install (locked)
         id: sync
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: uv sync --locked
 
       # Gated on the install so a failed sync surfaces as an install failure
@@ -115,15 +130,21 @@ jobs:
       # One version failing should not hide the state of the others.
       fail-fast: false
       matrix:
-        # Every version in the declared range (requires-python >=3.11,<4.0),
-        # not a subset. uv.lock splits dependencies at BOTH 3.13
-        # (typing-extensions is a dependency below it and absent at or above)
-        # and 3.14 (the resolution markers), so no two of these are reliably
-        # interchangeable — and CLAUDE.md's note on @override needing
-        # typing_extensions at the floor turns on exactly that split.
+        # Every version in the declared range (requires-python >=3.11,<4.0).
+        # These legs test the interpreter support the project claims, NOT the
+        # dependency set — the lockfile would justify only two of them:
+        #
+        #   uv export --frozen --no-emit-project --no-hashes | grep python_full_version
+        #
+        # returns numpy and nothing else, split at 3.12. So 3.12, 3.13 and 3.14
+        # install identical packages; uv.lock's fork at 3.14 resolves to nothing
+        # distinct, and its `< '3.13'` markers are typing-extensions edges, not
+        # a presence boundary — nine packages require it unconditionally.
         python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Sets UV_PYTHON, which takes precedence over .python-version, so the
       # install and the run below cannot disagree about the interpreter.
@@ -140,3 +161,54 @@ jobs:
       # is the regression, not a CI misconfiguration.
       - name: Tests
         run: uv run pytest -q
+
+  # `langgraph.json` declares `"dependencies": ["."]` — a plain install, no
+  # extras and no dev group — while every job above runs `uv sync --locked`,
+  # which pulls the dev group and with it streamlit: 95 packages against 66.
+  # So a module-scope `import streamlit` anywhere in src/ passes ruff, ty and
+  # all four pytest legs, and breaks only the deployed graph.
+  #
+  # `--no-editable` matters as much as `--no-dev`: `uv sync` installs the
+  # project itself editable by default, which leaves PROJECT_ROOT pointing at
+  # the checkout and the install only half the shape it claims to be.
+  #
+  # This is the one check here that cannot be a test. pytest runs inside the dev
+  # environment and cannot conjure one without it; the environment IS the check,
+  # which is why it is a job rather than a case in tests/.
+  deploy-shape:
+    name: deployed graph imports
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Install (deploy shape)
+        run: uv sync --locked --no-dev --no-editable
+
+      # --no-sync, or `uv run` restores the dev group and the check passes
+      # vacuously. The streamlit assertion is what makes that failure loud
+      # rather than silent, so keep it even though it looks redundant.
+      #
+      # What this does NOT prove is that the wheel works. Under --no-editable
+      # PROJECT_ROOT resolves the way it does from site-packages, which is to
+      # say wrongly — <venv>/lib rather than the repo — so WORKSPACE points at
+      # nothing and skills resolve to nothing. These imports still succeed,
+      # which is exactly the problem; README's Releases section records why no
+      # wheel is attached to a release until that is fixed.
+      - name: The deployed graph imports
+        run: |
+          uv run --no-sync python - <<'PY'
+          import importlib.util as util
+
+          assert util.find_spec("streamlit") is None, "the dev group leaked into the deploy install"
+
+          import event_planner.agent
+          import event_planner.cli
+          import event_planner.webui
+
+          print("the deployed graph imports without the web extra")
+          PY

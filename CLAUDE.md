@@ -14,6 +14,10 @@ what you need to *change code* safely.
 
 ```bash
 uv sync                                    # install (uv required; .python-version pins 3.14)
+                                           # uv itself is pinned: pyproject's
+                                           # [tool.uv] required-version gates
+                                           # every `uv` line below (not `uvx`).
+                                           # Mismatch -> `uv self update 0.12.5`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
 uv run pytest                              # 204 tests, ~6s, fully offline
@@ -45,6 +49,14 @@ resolved packages against 65. The `dev` group self-references `event-planner-age
 a checkout still gets the front end from `uv sync` alone and CI's plain `uv sync --locked`
 runs the AppTest suite unchanged. A **non-dev** install that wants the page needs
 `uv sync --extra web` (or `pip install '.[web]'`); `uv run event-planner` never does.
+
+That split is what the `deploy-shape` job in CI exists for. Every other job runs
+`uv sync --locked` and therefore gets the dev group, so a module-scope `import streamlit`
+in `src/` passes ruff, ty and all four pytest legs while breaking only the deployed graph.
+That job installs `--no-dev`, asserts streamlit is *absent* — without which it would pass
+vacuously the moment `--no-sync` came off — and imports `agent`, `cli` and `webui`. It is
+the one check here that cannot be a test: pytest runs inside the dev environment and
+cannot conjure one without it.
 
 `.streamlit/config.toml` is committed app configuration. **Streamlit resolves it from the
 current working directory, not from the script's directory** — measured: from another CWD
