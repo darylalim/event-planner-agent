@@ -103,11 +103,13 @@ recorded in the file: `github.sha` is the branch tip rather than the commit CI
 tested, the workflow only ever runs from main's copy of itself, and a tag pushed
 with `GITHUB_TOKEN` triggers no further workflows.
 
-Releases carry no build artifacts, deliberately. `PROJECT_ROOT` in `agent.py` is
-`Path(__file__).resolve().parents[2]`, which is the repo root from a source
-checkout and `<venv>/lib` from an installed wheel — and `workspace/` is not in the
-wheel at all, so a wheel user would get an agent whose skills silently resolve to
-nothing, with no error. Fix that before attaching a wheel or publishing to PyPI.
+Releases carry no build artifacts. The reason recorded here — that an installed
+wheel resolved its workspace to `<venv>/lib` and loaded no skills — is fixed: the
+workspace ships inside the package and CI's `deploy-shape` job asserts an
+installed copy resolves its skills. Attaching a wheel is now a decision rather
+than a blocked one, and publishing to PyPI remains separate: the name is
+unclaimed, a first upload takes it permanently, and README documents a
+checkout-and-`uv run` workflow that nobody has tested as an installed package.
 
 If you delete a release but leave its tag, the gate will say "already released"
 for good; the workflow's `workflow_dispatch` trigger is the recovery path.
@@ -136,7 +138,7 @@ lands on the shared root:
 | `/memories/` | `StoreBackend`, namespaced per user | Across sessions |
 | `/events/` | `StoreBackend`, namespaced per user | Across sessions |
 | `/artifacts/` | `StoreBackend`, namespaced per user | Across sessions |
-| everything else | `FilesystemBackend` rooted at `workspace/` | On disk, shared |
+| everything else | `ReadOnlyFilesystemBackend` rooted in the package | On disk, shared, read-only |
 
 `/artifacts/` is deepagents' own territory. `FilesystemMiddleware` derives
 `large_tool_results/` and `conversation_history/` beneath it and offloads a tool result over
@@ -145,11 +147,15 @@ spills is a named client's shortlist or costed budget, and the planner's own typ
 Routing is the same rule as `/events/`, applied to paths the harness writes rather than we
 do — and applied to the *root*, because the names below it are deepagents' to rename.
 
-Only `/skills/` currently lands on that shared root. The filesystem backend is
-rooted at `workspace/`, **not** the repo root, and runs with
-`virtual_mode=True` — the agent cannot read or write its own source. Those are
-path guardrails, not process isolation: don't repoint `root_dir` at the repo,
-and don't use this backend in a server process handling untrusted input.
+Only `/skills/` lands on that shared root, and the root **refuses writes**.
+It is `src/event_planner/workspace/`, inside the package so that an installed
+copy carries it, and it runs with `virtual_mode=True` — the agent cannot read
+or write its own source. Read-only is what makes a root inside the package
+safe: an unrouted `write("/evil.py")` would otherwise land on the import path,
+and a writable `/skills/` would let anything `web_search` returns rewrite the
+guidance every tenant's next session loads. Those are still path guardrails,
+not process isolation: don't repoint `root_dir` at the repo, and don't use this
+backend in a server process handling untrusted input.
 
 Event files are store-backed rather than on disk, so they aren't browsable by
 default. `/export` in the CLI writes the current user's files to `exports/`.
@@ -168,7 +174,8 @@ files carry client names, headcounts, guest lists, and budgets, so leaving them
 on the shared root let one planner's session read another's brief.
 
 **State lives outside the root.** Checkpoints and the store go in `.state/` at
-the repo root — a *sibling* of `workspace/`, never inside it. A database under
+the repo root, which the agent's root — now inside the package — is nowhere
+near. A database under
 the agent's root would let any session read every user's memories and every
 thread's history straight out of the raw file, bypassing namespacing
 completely. `--db` is validated against this too, so an operator can't
@@ -200,7 +207,7 @@ unroutable; it is labelled so no identified or threaded caller can land there.
 
 Both shape behaviour, but they load differently:
 
-- **Skills** (`workspace/skills/*/SKILL.md`) — opened on demand when the task
+- **Skills** (`src/event_planner/workspace/skills/*/SKILL.md`) — opened on demand when the task
   calls for them. Good for long domain guidance.
 - **Memory** (`/memories/AGENTS.md`) — injected into the system prompt every
   turn. Good for compact, always-relevant client facts.
@@ -471,8 +478,8 @@ src/event_planner/
   cli.py          interactive REPL with approval prompts
   webui.py        logic the page delegates to, testable without a Streamlit runtime
   tools/          catalog (stub) · budget (real) · bookings (stub) · search (live)
-workspace/        the agent's filesystem view — shared, so skills only
-  skills/         venue-sourcing · budget-modeling
+  workspace/      the agent's filesystem view — ships in the wheel, read-only
+    skills/       venue-sourcing · budget-modeling
 .state/           checkpoints, memory, event files   (gitignored, out of reach)
 exports/          /export output                     (gitignored)
 tests/

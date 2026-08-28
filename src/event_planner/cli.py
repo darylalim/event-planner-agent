@@ -23,10 +23,46 @@ from langgraph.store.base import SearchItem
 from langgraph.store.sqlite import SqliteStore
 from langgraph.types import Command
 
-from event_planner.agent import DEFAULT_MODEL, PROJECT_ROOT, WORKSPACE, build_agent
+from event_planner.agent import DEFAULT_MODEL, WORKSPACE, build_agent
 from event_planner.context import PlannerContext, namespace_for_user, safe_component
 
-#: Deliberately a sibling of `workspace/`, never inside it. The agent has
+#: The checkout this was run from. It lives here rather than in `agent.py`
+#: because everything below it — `.state/`, `.env`, `exports/` — is an operator
+#: concept that exists only in a checkout, whereas `agent.py`'s paths must also
+#: be right for an installed copy, and one constant cannot be both. Counting
+#: levels up from `__file__` is correct here and meaningless in site-packages,
+#: where it lands on `<venv>/lib/pythonX.Y`. `checkout_warning` reports that at
+#: startup — it does not prevent it, and deliberately: the operator can still
+#: point `--db` somewhere sensible and run. What it removes is the silence.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def checkout_warning() -> str | None:
+    """Message describing a `PROJECT_ROOT` that is not a checkout, or None.
+
+    The CLI is a development front end: it keeps `.state/` beside the repo and
+    writes `/export` output into `exports/`. Installed rather than checked out,
+    both land under the Python installation, and each is quiet on its own — a
+    database created where nobody looks, exports written beside it. Said once,
+    plainly, they are one recognisable problem.
+
+    It names `--db` and nothing else. `EVENT_PLANNER_DB` is the browser front
+    end's knob and this process never reads it, so naming it here would be the
+    mistake `_check_db_outside_workspace(..., knob=...)` exists to avoid, in
+    reverse. `.env` is left out for the same reason: `_load_env` falls back to
+    an upward search, so it is degraded rather than broken.
+    """
+    if (PROJECT_ROOT / "pyproject.toml").is_file():
+        return None
+    return (
+        f"Not running from a checkout: {PROJECT_ROOT} has no pyproject.toml.\n"
+        f"  .state/ and exports/ will be created under that path.\n"
+        f"  Pass --db to put the database somewhere you chose."
+    )
+
+
+#: Deliberately outside the agent's filesystem root, which now lives inside the
+#: package at `src/event_planner/workspace/`. The agent has
 #: `ls`/`read_file`/`glob`/`grep` over its filesystem root, so a database kept
 #: under that root would let any session read every other user's memories and
 #: every other thread's checkpoints straight out of the raw file — defeating
@@ -474,6 +510,10 @@ def main() -> int:
     args = parser.parse_args()
 
     _load_env()
+    # Beside the other startup checks rather than inside the credential gate:
+    # "are credentials present?" should not also emit a filesystem note.
+    if (warning := checkout_warning()) is not None:
+        print(f"  note: {warning}\n", file=sys.stderr)
     if (problem := _check_credentials()) is not None:
         print(f"error: {problem}", file=sys.stderr)
         return 2
@@ -491,7 +531,13 @@ def main() -> int:
         SqliteStore.from_conn_string(args.db) as store,
     ):
         store.setup()
-        graph = build_agent(model=args.model, checkpointer=checkpointer, store=store)
+        try:
+            graph = build_agent(model=args.model, checkpointer=checkpointer, store=store)
+        except FileNotFoundError as exc:
+            # A wheel that dropped its skills is a packaging fault, and it should
+            # read like the other startup refusals rather than as a traceback.
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
         config = {
             "configurable": {"thread_id": args.thread},
             "recursion_limit": args.max_steps,

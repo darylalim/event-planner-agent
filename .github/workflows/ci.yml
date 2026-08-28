@@ -193,13 +193,12 @@ jobs:
       # vacuously. The streamlit assertion is what makes that failure loud
       # rather than silent, so keep it even though it looks redundant.
       #
-      # What this does NOT prove is that the wheel works. Under --no-editable
-      # PROJECT_ROOT resolves the way it does from site-packages, which is to
-      # say wrongly — <venv>/lib rather than the repo — so WORKSPACE points at
-      # nothing and skills resolve to nothing. These imports still succeed,
-      # which is exactly the problem; README's Releases section records why no
-      # wheel is attached to a release until that is fixed.
-      - name: The deployed graph imports
+      # The skills assertion is the one pytest structurally cannot make. A
+      # checkout cannot tell a package-relative root from one derived by
+      # counting levels up from __file__, because in a checkout both land on a
+      # real directory; only an installed copy separates them. That is the
+      # environment this job exists to be, so this is where that fix is pinned.
+      - name: The deployed graph imports, with its skills
         run: |
           uv run --no-sync python - <<'PY'
           import importlib.util as util
@@ -210,5 +209,15 @@ jobs:
           import event_planner.cli
           import event_planner.webui
 
-          print("the deployed graph imports without the web extra")
+          workspace = event_planner.agent.WORKSPACE
+          assert workspace.is_dir(), f"the installed copy carries no workspace: {workspace}"
+
+          backend = event_planner.agent.build_backend()
+          skills = [e["path"] for e in (backend.ls("/skills/").entries or [])]
+          assert skills, "the installed copy resolved no skills"
+
+          refusal = backend.write("/evil.py", "x").error
+          assert refusal, "the shared root is writable in the deployed shape"
+
+          print(f"deployed graph imports; skills={len(skills)}; shared root read-only")
           PY

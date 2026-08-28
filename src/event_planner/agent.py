@@ -6,23 +6,24 @@ Backend layout — the load-bearing decision in this file:
       "/memories/"   -> StoreBackend(namespace=per-user)       persists across sessions
       "/events/"     -> StoreBackend(namespace=per-user)       persists across sessions
       "/artifacts/"  -> StoreBackend(namespace=per-user)       persists across sessions
-      default        -> FilesystemBackend(root_dir=workspace)  on disk, shared by everyone
+      default        -> ReadOnlyFilesystemBackend(<package>/workspace)  shared, no writes
 
 `CompositeBackend` matches the longest route prefix first, and the filesystem
 backend is the **default** rather than a route — so a path matching no route
 does not fail, it lands on a root that every session can read. Anything the
 agent writes under `/memories/`, `/events/` or `/artifacts/` goes to the
 LangGraph store in that user's namespace and survives the thread; everything
-else is an ordinary file in the workspace directory, visible to every other
-planner. Only `/skills/` is meant to be there. See `build_backend` for why
+else is *refused*: the shared root holds skills and nothing else, and no
+legitimate write is unrouted. See `build_backend` for why
 `/events/` has to be routed, and why `/artifacts/` is routed at its root
 rather than by the names deepagents derives beneath it.
 
 Three things worth knowing if you change this:
 
-* `FilesystemBackend` is rooted at `workspace/`, not the repo root, and runs
-  with `virtual_mode=True`, which blocks `..`, `~`, and absolute paths outside
-  the root. The agent therefore cannot read or write its own source. Those are
+* The root is `src/event_planner/workspace/`, INSIDE the package so an
+  installed copy carries its skills, and it runs with `virtual_mode=True`,
+  which blocks `..`, `~`, and absolute paths outside the root. The agent
+  therefore cannot read its own source. Those are
   path guardrails, not process isolation: do not repoint `root_dir` at the
   repo, and do not use this backend in a server process that handles untrusted
   input.
@@ -42,6 +43,12 @@ from typing import Any, cast
 
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, FilesystemBackend, StoreBackend
+from deepagents.backends.protocol import (
+    DeleteResult,
+    EditResult,
+    FileUploadResponse,
+    WriteResult,
+)
 from langchain.agents.middleware import TodoListMiddleware
 from langgraph.store.base import BaseStore
 
@@ -66,11 +73,16 @@ from event_planner.tools import (
 
 DEFAULT_MODEL = "claude-opus-5"
 
-#: Repo root, i.e. the parent of `src/`.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-#: Everything the agent can see on disk. Deliberately not the repo root.
-WORKSPACE = PROJECT_ROOT / "workspace"
+#: Everything the agent can see on disk, and the only path here derived from
+#: `__file__`. It sits INSIDE the package on purpose: a wheel carries
+#: `event_planner/workspace/skills/`, so this resolves in an installed copy as
+#: well as a checkout. The previous form counted levels up from the file
+#: (`parents[2]`), which is the repo in a checkout and `<venv>/lib/pythonX.Y`
+#: in site-packages — a directory that does not exist, so `build_backend`
+#: returned a backend rooted at nothing and `skills=["/skills/"]` silently
+#: loaded none. Deriving from the package directory removes the index rather
+#: than correcting it: there is no level to miscount.
+WORKSPACE = Path(__file__).resolve().parent / "workspace"
 
 #: Where deepagents offloads its own spill. `FilesystemMiddleware` derives
 #: `<root>/large_tool_results/` and `<root>/conversation_history/` from the
@@ -100,6 +112,69 @@ ORCHESTRATOR_TOOLS = [
     hold_venue,
     send_invitations,
 ]
+
+
+class ReadOnlyFilesystemBackend(FilesystemBackend):
+    """The shared root, with every mutation refused.
+
+    Nothing legitimate writes here. Skills are shared reference material, and
+    every write the prompts ask for is routed away — `/events/`, `/memories/`
+    and `/artifacts/` all land in per-user store namespaces. So a write that
+    reaches this backend is the model off script, and letting it land was two
+    hazards at once. Skills are loaded into every tenant's next session, and
+    `web_search` is live Tavily, so a writable `/skills/` lets whatever the web
+    returns rewrite the guidance everyone else gets. And since the root now
+    ships inside the package, an unrouted `write("/evil.py")` would put a file
+    on the import path.
+
+    Refusing rather than raising is deliberate: `error` is how this protocol
+    reports a refusal, so the model reads one and moves on, where an exception
+    would end the turn.
+
+    Two tests hold this, and the split matters.
+    `test_the_read_only_root_refuses_every_mutator` drives all eight methods and
+    checks the file survives, so an override that returned success would red.
+    `test_the_backend_surface_has_not_moved` compares deepagents' whole public
+    surface against a recorded baseline, so a release that ADDS a mutator reds
+    too. The first version tried to do both by filtering `dir()` for the mutator
+    names, which cannot work: the filter can never contain a name nobody has
+    added yet, and a planted `move` left it green.
+    """
+
+    #: Every mutating method in the backend protocol, sync names only; see the
+    #: comment below for why the async twins need no override.
+    MUTATORS = ("write", "edit", "delete", "upload_files")
+
+    _REFUSAL = (
+        "The shared workspace is read-only; it holds skills, which every session "
+        "shares. Write plans and briefs under /events/, and durable client facts "
+        "under /memories/."
+    )
+
+    # `path` and `occurrences` are left unset on purpose: the protocol documents
+    # both as None on failure, and a consumer that branches on a truthy `path`
+    # would read a refusal as a completed write.
+    #
+    # No async twins. `BackendProtocol` implements each `a*` as
+    # `await asyncio.to_thread(self.<sync>, ...)`, so overriding the sync method
+    # refuses both — measured, not assumed, and the test drives all eight.
+    def write(self, file_path: str, content: str) -> WriteResult:
+        return WriteResult(error=self._REFUSAL)
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        return EditResult(error=self._REFUSAL)
+
+    def delete(self, file_path: str) -> DeleteResult:
+        return DeleteResult(error=self._REFUSAL)
+
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        return [FileUploadResponse(path=path, error=self._REFUSAL) for path, _ in files]
 
 
 def build_backend() -> CompositeBackend:
@@ -135,8 +210,19 @@ def build_backend() -> CompositeBackend:
     up twice in the agent's root listing and anything written to the on-disk
     copy was unreadable.
     """
+    skills = WORKSPACE / "skills"
+    if not skills.is_dir():
+        # The failure this replaces was silent: deepagents logs one WARNING for
+        # an unreadable skills path and then builds an agent that plans without
+        # them, which reads as the model ignoring its guidance rather than as a
+        # packaging fault. Measured on an installed copy before the fix.
+        raise FileNotFoundError(
+            f"No skills at {skills}. The agent's workspace ships inside the "
+            "package; an install missing it is a packaging fault, not a "
+            "configuration one."
+        )
     return CompositeBackend(
-        default=FilesystemBackend(root_dir=WORKSPACE, virtual_mode=True),
+        default=ReadOnlyFilesystemBackend(root_dir=WORKSPACE, virtual_mode=True),
         routes={
             "/memories/": StoreBackend(namespace=memory_namespace),
             "/events/": StoreBackend(namespace=events_namespace),

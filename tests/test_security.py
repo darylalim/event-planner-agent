@@ -16,7 +16,13 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from event_planner.agent import ARTIFACTS_ROOT, WORKSPACE, build_backend
+import event_planner.agent as agent_module
+from event_planner.agent import (
+    ARTIFACTS_ROOT,
+    WORKSPACE,
+    ReadOnlyFilesystemBackend,
+    build_backend,
+)
 from event_planner.cli import STATE_DIR, _check_db_outside_workspace
 from event_planner.context import (
     PlannerContext,
@@ -334,7 +340,16 @@ def test_offloaded_tool_results_do_not_land_on_the_shared_root(tmp_path, monkeyp
 
     from event_planner import agent as agent_module
 
+    # A workspace with no skills/ is not a state that can ship: `build_backend`
+    # refuses it rather than handing back an agent whose skills load as none.
+    (tmp_path / "skills").mkdir()
     monkeypatch.setattr(agent_module, "WORKSPACE", tmp_path)
+    # "Gained nothing", not "is empty": a valid workspace is no longer an empty
+    # directory, and hardcoding that would couple this to what a workspace holds.
+    # Recursive on purpose — the derived prefix is `<root>/large_tool_results/`,
+    # so a leak lands BENEATH an existing directory and a top-level name check
+    # would not see it.
+    before = sorted(str(q.relative_to(tmp_path)) for q in tmp_path.rglob("*"))
     spill = FilesystemMiddleware(backend=build_backend())._large_tool_results_prefix
     store = InMemoryStore()
     graph = agent_module.build_agent(
@@ -371,7 +386,9 @@ def test_offloaded_tool_results_do_not_land_on_the_shared_root(tmp_path, monkeyp
 
     who = _Runtime(PlannerContext(user_id="alice@example.com"))
     assert list(store.search(artifacts_namespace(who))), "offload missed the per-user store"
-    assert list(tmp_path.iterdir()) == [], "offload reached the shared filesystem root"
+    assert sorted(str(q.relative_to(tmp_path)) for q in tmp_path.rglob("*")) == before, (
+        "offload reached the shared filesystem root"
+    )
 
 
 def test_the_two_offload_paths_do_not_alias(tmp_path, monkeypatch):
@@ -391,6 +408,9 @@ def test_the_two_offload_paths_do_not_alias(tmp_path, monkeypatch):
 
     from event_planner import agent as agent_module
 
+    # A workspace with no skills/ is not a state that can ship: `build_backend`
+    # refuses it rather than handing back an agent whose skills load as none.
+    (tmp_path / "skills").mkdir()
     monkeypatch.setattr(agent_module, "WORKSPACE", tmp_path)
     middleware = FilesystemMiddleware(backend=build_backend())
     results = middleware._large_tool_results_prefix
@@ -583,3 +603,141 @@ def test_every_irreversible_tool_is_actually_bound():
         f"IRREVERSIBLE_TOOLS names unbound tools: {sorted(ungated)}. INTERRUPT_ON "
         f"is derived from that list, so the gate is keyed to nothing."
     )
+
+
+def test_the_agents_root_ships_inside_the_package():
+    """The root must be package-relative, or an installed copy has no skills.
+
+    Derived by counting levels up from `__file__` it was the repo in a checkout
+    and `<venv>/lib/pythonX.Y` in site-packages — a directory that does not
+    exist, so the backend was rooted at nothing and `skills=["/skills/"]`
+    loaded none of them, with one deepagents WARNING and no other symptom.
+    Asserting containment rather than the literal expression keeps this about
+    the property; the CI `deploy-shape` job is what proves it in the install,
+    since a checkout cannot tell the two derivations apart.
+    """
+    package_dir = Path(agent_module.__file__).resolve().parent
+    assert WORKSPACE.is_relative_to(package_dir), (
+        f"{WORKSPACE} is outside {package_dir}; an installed copy would not carry it"
+    )
+    assert (WORKSPACE / "skills").is_dir()
+
+
+def test_a_workspace_without_skills_is_refused(tmp_path, monkeypatch):
+    """Missing skills must raise, not degrade.
+
+    deepagents logs a single WARNING for an unreadable skills path and then
+    builds an agent that plans without its guidance, which reads as the model
+    ignoring instructions rather than as a packaging fault. `build_agent`
+    already refuses to hand back an agent whose approval gates do not gate;
+    this is the same rule for the guidance it promises the model it has.
+    """
+    monkeypatch.setattr(agent_module, "WORKSPACE", tmp_path)
+    with pytest.raises(FileNotFoundError, match="No skills at"):
+        build_backend()
+
+
+#: deepagents 0.7.9's complete public backend surface, recorded rather than
+#: derived. Deriving it by filtering for the mutator names is circular — the
+#: filter cannot contain a name nobody has added yet — and the first version of
+#: this guard did exactly that: subclassing `FilesystemBackend` with `move` and
+#: `amove` left it green while the new method inherited the real implementation.
+BACKEND_SURFACE = frozenset(
+    {
+        "adelete",
+        "adownload_files",
+        "aedit",
+        "aglob",
+        "agrep",
+        "als",
+        "aread",
+        "aupload_files",
+        "awrite",
+        "delete",
+        "download_files",
+        "edit",
+        "glob",
+        "grep",
+        "ls",
+        "read",
+        "upload_files",
+        "write",
+    }
+)
+
+
+def test_the_backend_surface_has_not_moved():
+    """Any new backend method must be classified as read or mutate, by hand.
+
+    Broader than it looks, and deliberately: a new *reader* reds this too. That
+    is the price of a check that cannot be fooled by the thing it is checking,
+    and the alternative — asking only about names already known to mutate — is
+    the circularity described above. Widen `BACKEND_SURFACE` once the new method
+    is understood, and override it in `ReadOnlyFilesystemBackend` if it writes.
+    """
+    from deepagents.backends import FilesystemBackend
+
+    actual = {name for name in dir(FilesystemBackend) if not name.startswith("_")}
+    assert actual == BACKEND_SURFACE, (
+        f"deepagents' backend surface moved: {actual ^ BACKEND_SURFACE}. "
+        "Classify it, then widen BACKEND_SURFACE — and override it if it mutates."
+    )
+
+
+def test_the_read_only_root_refuses_every_mutator(tmp_path):
+    """Drive all eight mutators, sync and async, and check the file survives.
+
+    Behavioural rather than reflective. An earlier version asserted the override
+    appeared in `vars()`, which both passed an override whose body returned
+    success and failed a correct simplification: `BackendProtocol` implements
+    each `a*` as `await asyncio.to_thread(self.<sync>, ...)`, so the four async
+    twins need no override at all and asserting their presence locked in dead
+    code.
+    """
+    import asyncio
+
+    (tmp_path / "skills").mkdir()
+    target = tmp_path / "skills" / "SKILL.md"
+    target.write_text("original", encoding="utf-8")
+    backend = ReadOnlyFilesystemBackend(root_dir=tmp_path, virtual_mode=True)
+
+    assert backend.write("/skills/SKILL.md", "x").error
+    assert backend.edit("/skills/SKILL.md", "original", "x").error
+    assert backend.delete("/skills/SKILL.md").error
+    assert all(r.error for r in backend.upload_files([("/skills/SKILL.md", b"x")]))
+
+    assert asyncio.run(backend.awrite("/skills/SKILL.md", "x")).error
+    assert asyncio.run(backend.aedit("/skills/SKILL.md", "original", "x")).error
+    assert asyncio.run(backend.adelete("/skills/SKILL.md")).error
+    assert all(r.error for r in asyncio.run(backend.aupload_files([("/skills/SKILL.md", b"x")])))
+
+    assert target.read_text(encoding="utf-8") == "original", "a refusal still wrote"
+    assert MUTATORS_COVERED == set(ReadOnlyFilesystemBackend.MUTATORS)
+
+
+#: The sync names the class overrides. Kept beside the behavioural test so the
+#: constant and the methods it names cannot drift apart unnoticed.
+MUTATORS_COVERED = {"write", "edit", "delete", "upload_files"}
+
+
+def test_the_real_shared_root_refuses_a_write():
+    """The composite the agent is actually handed, not a fixture of one.
+
+    The skills here are the ones that ship, so this is also the check that a
+    refusal does not touch them.
+    """
+    backend = build_backend()
+    skill = WORKSPACE / "skills" / "venue-sourcing" / "SKILL.md"
+    before = skill.read_bytes()
+
+    for path in ("/evil.py", "/skills/venue-sourcing/SKILL.md"):
+        result = backend.write(path, "x")
+        assert result.error, f"{path} was writable"
+        assert "read-only" in result.error.lower()
+        assert result.path is None, "a refusal must not report a written path"
+
+    assert backend.delete("/skills/venue-sourcing/SKILL.md").error
+    assert backend.edit("/skills/venue-sourcing/SKILL.md", "name", "x").error
+
+    assert not (WORKSPACE / "evil.py").exists()
+    assert skill.read_bytes() == before, "a refused write still changed the skill"

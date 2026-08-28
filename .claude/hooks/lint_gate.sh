@@ -103,7 +103,7 @@ fi
 # The speed was never the argument -- the misattribution is.)
 #
 # What scoping gives up is the caller you broke in another file. That is
-# covered, better, by test_gate.sh: 204 offline tests that import every module
+# covered, better, by test_gate.sh: 212 offline tests that import every module
 # and run on exactly the edits where cross-file breakage happens.
 #
 # ty infers its target from requires-python, so this checks against 3.11 (the

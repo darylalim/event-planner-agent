@@ -11,7 +11,7 @@ does not guard `.claude/settings.json`.
 | --- | --- | --- |
 | `protect_files.sh` | PreToolUse | `.env*` (except `.env.example`), and `.claude/hooks/` |
 | `lint_gate.sh` | PostToolUse | any `.py` in the project |
-| `test_gate.sh` | PostToolUse | `src/event_planner/`, `tests/`, `workspace/`, `pyproject.toml`, `uv.lock` |
+| `test_gate.sh` | PostToolUse | `src/event_planner/` (the agent's workspace is inside it), `tests/`, `pyproject.toml`, `uv.lock` |
 
 `_common.sh` is sourced by all three. It parses the payload once and exports
 `HOOK_ROOT` and `HOOK_PATH` (absolute and lexically normalized). Parsing stdin
@@ -50,14 +50,14 @@ hooks untestable from inside a session.
 
 **`guard_workspace.sh` — cut, and covered elsewhere.** `test_security.py` holds
 both halves: `test_shared_filesystem_root_holds_only_reference_material` reds on
-a top-level entry under `workspace/` other than `skills`, and
+a top-level entry under the agent's root other than `skills`, and
 `test_agent_cannot_see_a_state_directory_in_its_listing` covers `.state`. That
 first test gained dot entries — its `startswith(".")` filter was dropped, because
-`FilesystemBackend.ls("/")` enumerates them, so `workspace/.state/planner.sqlite`
-reached every session exactly as `workspace/events/acme.md` would. It is still
+`FilesystemBackend.ls("/")` enumerates them, so a `.state/planner.sqlite` under
+the root reached every session exactly as an `events/acme.md` would. It is still
 one non-recursive `iterdir()`, not a walk of the tree; see "What these do not
-cover" below. `test_gate.sh` now watches `workspace/` rather than
-`workspace/skills/`, so a write there runs those tests locally within seconds.
+cover" below. The root now lives at `src/event_planner/workspace/`, which
+`test_gate.sh` watches via its `src/event_planner` entry.
 
 Be precise about what that trade is, because the first version of this paragraph
 was not. `test_gate.sh` runs under the **same** `Write|Edit|NotebookEdit` matcher
@@ -150,8 +150,10 @@ this is that gap stated rather than papered over.
 **Reads are not gated.** Nothing stops `cat .env` or reading another user's
 export. These hooks guard writes.
 
-**`workspace/skills/` still takes writes, and nothing walks below it.** Skills
-are shared reference material by design, so the subtree is writable, and
+**Nothing walks below `skills/`.** The agent can no longer write there — the
+shared root refuses every mutation, and `test_the_backend_surface_has_not_moved`
+reds if deepagents' protocol grows a method nobody has classified — but the local guards do not walk
+the subtree, and
 `test_shared_filesystem_root_holds_only_reference_material` is a single
 non-recursive `WORKSPACE.iterdir()`. Client data parked at
 `workspace/skills/acme/brief.md` passes both the hook and the test.

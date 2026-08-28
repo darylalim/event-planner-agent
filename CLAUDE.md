@@ -20,7 +20,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.12.5`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 204 tests, ~6s, fully offline
+uv run pytest                              # 212 tests, ~6s, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -53,10 +53,13 @@ runs the AppTest suite unchanged. A **non-dev** install that wants the page need
 That split is what the `deploy-shape` job in CI exists for. Every other job runs
 `uv sync --locked` and therefore gets the dev group, so a module-scope `import streamlit`
 in `src/` passes ruff, ty and all four pytest legs while breaking only the deployed graph.
-That job installs `--no-dev`, asserts streamlit is *absent* — without which it would pass
-vacuously the moment `--no-sync` came off — and imports `agent`, `cli` and `webui`. It is
-the one check here that cannot be a test: pytest runs inside the dev environment and
-cannot conjure one without it.
+That job installs `--no-dev --no-editable`, asserts streamlit is *absent* — without which
+it would pass vacuously the moment `--no-sync` came off — imports `agent`, `cli` and
+`webui`, and then asserts the installed copy resolves its skills and refuses a write to
+its shared root. Those last two are the ones pytest structurally cannot make: a checkout
+cannot tell a package-relative root from one derived by counting levels up from
+`__file__`, because in a checkout both land on a real directory. Only an installed copy
+separates them, and this job is the only place that exists.
 
 `.streamlit/config.toml` is committed app configuration. **Streamlit resolves it from the
 current working directory, not from the script's directory** — measured: from another CWD
@@ -123,15 +126,15 @@ build_agent()                     agent.py — the only place the harness is ass
 
 ### Storage: the default is shared, the routes are private
 
-`CompositeBackend` matches the **longest route prefix first**, and `FilesystemBackend`
-is the **default**, not a route:
+`CompositeBackend` matches the **longest route prefix first**, and the read-only
+filesystem backend is the **default**, not a route:
 
 | Path | Backend | Visibility |
 | --- | --- | --- |
 | `/memories/` | `StoreBackend(namespace=memory_namespace)` | Per user, across sessions |
 | `/events/` | `StoreBackend(namespace=events_namespace)` | Per user, across sessions |
 | `/artifacts/` (`ARTIFACTS_ROOT`) | `StoreBackend(namespace=artifacts_namespace)` | Per user, across sessions |
-| everything else | `FilesystemBackend(root_dir=workspace/, virtual_mode=True)` | **Shared across all sessions** |
+| everything else | `ReadOnlyFilesystemBackend(root_dir=<package>/workspace/)` | Shared, and refuses writes |
 
 `/artifacts/` is deepagents' territory, not ours, and nothing in this repo writes beneath it —
 which is why it was missed. `FilesystemMiddleware` derives `<root>/large_tool_results/` and
@@ -158,6 +161,23 @@ per user. **Any new path holding user data needs a route in `build_backend()` pl
 namespace factory in `context.py`**, or it lands on the shared root and one planner's
 session can read another's brief.
 
+That root is `src/event_planner/workspace/` — **inside the package**, so a wheel carries
+it and an installed copy resolves its skills. It used to be `parents[2]` from `agent.py`,
+which is the repo in a checkout and `<venv>/lib/pythonX.Y` in site-packages: a directory
+that does not exist, so the backend was rooted at nothing and `skills=["/skills/"]` loaded
+none, with one deepagents WARNING and no other symptom. Deriving from the package
+directory removes the index rather than correcting it. Two consequences follow.
+`build_backend` **raises** when `skills/` is missing, on the same rule as `build_agent`
+refusing an un-gated agent. And the root **refuses every write**
+(`ReadOnlyFilesystemBackend`), because a writable directory inside the package is a file
+on the import path, and a writable `/skills/` lets whatever `web_search` returns rewrite
+the guidance every tenant's next session loads. Nothing legitimate writes there — every
+write the prompts ask for is routed. Two tests hold it:
+`test_the_read_only_root_refuses_every_mutator` drives all eight methods and checks the
+file survives, and `test_the_backend_surface_has_not_moved` compares deepagents' whole
+public surface against a recorded baseline — because a check that filters `dir()` for the
+mutator names it already knows can never see one that was just added.
+
 ### The three-file loop
 
 Changing behaviour usually touches all three, and they drift silently:
@@ -173,7 +193,7 @@ Changing behaviour usually touches all three, and they drift silently:
 - `subagents.py` — subagents do **not** inherit the orchestrator's skills. Each lists its
   own (`venue-researcher` and `budget-analyst` repeat paths the orchestrator also has).
 
-Skills live in `workspace/skills/*/SKILL.md` as plain markdown with YAML frontmatter
+Skills live in `src/event_planner/workspace/skills/*/SKILL.md` as plain markdown with YAML frontmatter
 (`name`, `description`). They are shared reference material, versioned in git, and read by
 the agent at runtime — they're behaviour, not documentation.
 
@@ -341,7 +361,7 @@ when the host reaped the server mid-`task`. The approval branch takes precedence
 real interrupt also leaves `next` set — `test_a_pending_approval_takes_precedence_over_resume`
 guards that ordering.
 
-**State lives outside `workspace/`.** `.state/` is a *sibling*. A SQLite file under the
+**State lives outside the agent's root.** `.state/` sits at the repo root, and the root is now inside the package. A SQLite file under the
 agent's root would expose every user's memories and every thread's checkpoints in raw
 form, bypassing namespacing entirely. `_check_db_outside_workspace` enforces this for
 operator-supplied `--db` too.

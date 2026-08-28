@@ -514,10 +514,40 @@ def test_stored_items_reads_back_what_the_agent_wrote(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
+def test_the_checkout_warning_is_silent_in_a_checkout():
+    """It must not fire on a normal `uv run event-planner`."""
+    from event_planner.cli import checkout_warning
+
+    assert checkout_warning() is None
+
+
+def test_the_checkout_warning_names_only_the_knob_the_cli_reads(monkeypatch, tmp_path):
+    """`EVENT_PLANNER_DB` is the page's knob; this process never reads it.
+
+    Naming it would be `_check_db_outside_workspace(..., knob=...)` in reverse —
+    telling an operator to set something that changes nothing for them.
+    """
+    from event_planner import cli
+
+    monkeypatch.setattr(cli, "PROJECT_ROOT", tmp_path)
+    warning = cli.checkout_warning()
+    assert warning is not None
+    assert str(tmp_path) in warning
+    assert "--db" in warning
+    assert "EVENT_PLANNER_DB" not in warning
+
+
+def test_both_front_ends_share_one_checkout_warning():
+    """The page must show the CLI's note, not an equivalent of its own."""
+    from event_planner import cli, webui
+
+    assert webui.checkout_warning is cli.checkout_warning
+
+
 def _pyproject():
     import tomllib
 
-    from event_planner.agent import PROJECT_ROOT
+    from event_planner.cli import PROJECT_ROOT
 
     return tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 

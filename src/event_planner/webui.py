@@ -51,6 +51,7 @@ from event_planner.cli import (
     _check_db_outside_workspace,
     _decline_message,
     _stored,
+    checkout_warning,
     credentials_problem,
     degraded_capability_note,
 )
@@ -66,6 +67,7 @@ __all__ = [
     "UnsafeDatabaseLocation",
     "approve_decision",
     "brief_args",
+    "checkout_warning",
     "close_persistence",
     "credentials_problem",
     "degraded_capability_note",

@@ -51,8 +51,8 @@ from typing import Any
 import streamlit as st
 from langgraph.types import Command
 
-from event_planner.agent import DEFAULT_MODEL, PROJECT_ROOT, build_agent
-from event_planner.cli import STATE_DIR, _load_env
+from event_planner.agent import DEFAULT_MODEL, build_agent
+from event_planner.cli import PROJECT_ROOT, STATE_DIR, _load_env
 from event_planner.context import PlannerContext
 from event_planner.webui import (
     DEFAULT_MAX_STEPS,
@@ -60,6 +60,7 @@ from event_planner.webui import (
     UnsafeDatabaseLocation,
     approve_decision,
     brief_args,
+    checkout_warning,
     close_persistence,
     credentials_problem,
     degraded_capability_note,
@@ -523,6 +524,13 @@ if (problem := credentials_problem()) is not None:
 
 if (note := degraded_capability_note()) is not None:
     st.caption(f":material/info: {note}")
+
+# The same note the CLI prints, for the same reason and from the same function.
+# This page imports STATE_DIR from cli, so it lands its database on exactly the
+# root the warning is about; showing it in one front end and not the other is
+# the divergence `test_the_shared_helpers_are_the_clis_own_objects` exists over.
+if (warning := checkout_warning()) is not None:
+    st.caption(f":material/info: {warning}")
 
 # `.streamlit/config.toml` pins the bind to loopback, but Streamlit resolves
 # project config from the *current working directory*, not from the script's

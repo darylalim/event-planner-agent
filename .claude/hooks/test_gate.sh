@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # PostToolUse: run the whole test suite after a change that can alter behaviour.
 #
-# Running everything rather than a related subset is affordable here: 204 tests,
+# Running everything rather than a related subset is affordable here: 212 tests,
 # ~5.8s reported by pytest, ~6.6s wall through `uv run`, fully offline, no API
 # key. (This header said "91 tests, ~1.2s" for a long time; it was 5x stale,
 # which is what a hook nobody re-justifies looks like. It then said "201 tests"
 # on the commit that pruned the hook set -- written before the two drift tests
 # that commit added. Re-measure it when you next touch this file, and re-measure
 # it AFTER the edit, not from memory of what it was.)
+#
+# The count is 212 as of the workspace move; the timings are NOT re-measured and
+# are deliberately left at the last quiet-machine figures. Measured during that
+# commit they read 25s, with a foreground game at 164% CPU and a load average of
+# 3.5 -- a number about the machine, not the suite. Re-measure on an idle box.
 #
 # 4.5s of that 5.8s is test_streamlit_page.py alone, so the only meaningful
 # subset is "skip the AppTest file" -- and any src-file-to-test-file map would be
@@ -32,19 +37,20 @@ _hook_common="$(dirname "$0")/_common.sh"
 
 # src/ and tests/ are the obvious triggers. The other two are not:
 #
-#   workspace/       the WHOLE tree, not just workspace/skills/. This is what
-#                    replaces guard_workspace.sh: a write under workspace/ now
-#                    runs test_shared_filesystem_root_holds_only_reference_material
-#                    locally, and reports as a test failure rather than 20 lines
-#                    of stderr. Note what it is NOT: this hook runs under the
-#                    same Write|Edit|NotebookEdit matcher guard_workspace.sh had,
-#                    so it is the same coverage moved from blocking to
-#                    after-the-fact, not wider coverage. A `printf > workspace/`
-#                    through Bash fires nothing here (see README.md, "What these
-#                    do not cover"); CI is what catches that. Skills are
-#                    behaviour in their own right: they are loaded into context
-#                    at runtime, and since the drift check moved into tests/,
-#                    SKILL.md files are now read by
+#   (workspace/)     no longer listed, and not an omission: the agent's root
+#                    moved to src/event_planner/workspace/ so that an installed
+#                    copy carries its skills, which the first entry above already
+#                    watches. This replaced guard_workspace.sh -- a write under
+#                    the root runs
+#                    test_shared_filesystem_root_holds_only_reference_material
+#                    locally, reported as a test failure rather than 20 lines of
+#                    stderr. Note what that is NOT: this hook runs under the same
+#                    Write|Edit|NotebookEdit matcher guard_workspace.sh had, so it
+#                    is the same coverage moved from blocking to after-the-fact.
+#                    A `printf >` through Bash fires nothing here (see README.md,
+#                    "What these do not cover"); CI is what catches that. Skills
+#                    are behaviour in their own right -- loaded into context at
+#                    runtime, and read by
 #                    test_every_bound_tool_is_named_somewhere in test_harness.py.
 #
 #   pyproject.toml   test_webui.py parses it directly to assert streamlit is a
@@ -69,7 +75,7 @@ _hook_common="$(dirname "$0")/_common.sh"
 # Dropped: langgraph.json (read by no test; test_webui.py only names it in a
 # docstring).
 watched=0
-for base in src/event_planner tests workspace; do
+for base in src/event_planner tests; do
   hook_under "$HOOK_PATH" "$HOOK_ROOT/$base" && watched=1
 done
 case "$HOOK_PATH" in
