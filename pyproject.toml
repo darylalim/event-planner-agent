@@ -78,7 +78,7 @@ required-version = "==0.12.5"
 line-length = 100
 
 [tool.ruff.lint]
-# BLE is here so the three `# noqa: BLE001` directives in the source suppress a
+# BLE is here so the five `# noqa: BLE001` directives in the source suppress a
 # rule that is actually enabled, and RUF (which carries RUF100) fails the check
 # if one of them ever goes stale.
 select = ["E", "F", "I", "UP", "B", "BLE", "ANN", "RUF"]

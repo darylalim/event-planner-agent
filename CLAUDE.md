@@ -28,12 +28,39 @@ uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
 uv run event-planner                       # interactive CLI
 uv run event-planner --user alice@example.com --thread offsite-2026
 uv run streamlit run streamlit_app.py      # browser UI (EVENT_PLANNER_DB overrides the db)
-uv run langgraph dev                       # LangGraph Studio (host supplies persistence)
+uv run --with "langgraph-cli[inmem]" langgraph dev
+                                           # LangGraph Studio. `langgraph-cli` is NOT a
+                                           # dependency and is in no lockfile, so a bare
+                                           # `uv run langgraph dev` fails to spawn; the
+                                           # `--with` form keeps the locked env the graph
+                                           # needs. Host supplies persistence.
 
 uvx ruff check .                           # lint  — config in pyproject.toml, not a dep
 uvx ruff format .                          # format — enforced by CI, run before committing
 uvx ty check                               # types — config in pyproject.toml, not a dep
+                                           # These three resolve LATEST; the hook and CI
+                                           # pin older ones — see two paragraphs below.
 ```
+
+**Three Claude Code hooks are live**, configured in `.claude/settings.json`; the scripts and
+their full rationale are in `.claude/hooks/README.md`. PreToolUse `protect_files.sh` **blocks**
+a Write/Edit to `.env*` (not `.env.example`) and to `.claude/hooks/` itself, so changing a guard
+is an operator action taken outside a session — it deliberately does *not* guard
+`settings.json`, which is where a hook is removed. PostToolUse `lint_gate.sh` runs ruff and ty
+on any edited `.py` (~185 ms), and `test_gate.sh` runs the whole suite after an edit under
+`src/event_planner/`, `tests/`, `pyproject.toml` or `uv.lock` (~6.6 s); both exit 2, so their
+findings arrive as tool feedback rather than as a silently passing edit. Hook *config* is
+snapshotted at session start, while the hook *scripts* are re-read from disk on every call.
+None of them see Bash — a shell redirect reaches nothing here.
+
+**The lint and type versions are pinned in two files that must agree.**
+`.claude/hooks/lint_gate.sh` carries `RUFF="ruff@0.16.1"` and `TY="ty@0.0.65"`;
+`.github/workflows/ci.yml` sets the same two in `env:` and its `static` job greps the hook with
+`grep -qxF` — a **whole-line** match, so those two assignments must stay exactly as written: no
+`export`, no trailing comment, nothing else on the line. Bump both or neither, and note the
+edit to `lint_gate.sh` is one `protect_files.sh` blocks. The `uvx` lines above are deliberately
+unpinned and today resolve newer, so a finding you see locally is not necessarily one CI
+reports, or vice versa.
 
 **When working with Python, invoke the relevant `/astral:<skill>` — `/astral:uv`,
 `/astral:ty`, `/astral:ruff` — to ensure best practices are followed.** They carry the
@@ -61,35 +88,23 @@ cannot tell a package-relative root from one derived by counting levels up from
 `__file__`, because in a checkout both land on a real directory. Only an installed copy
 separates them, and this job is the only place that exists.
 
-`.streamlit/config.toml` is committed app configuration. **Streamlit resolves it from the
-current working directory, not from the script's directory** — measured: from another CWD
-`config.get_option("server.address")` comes back `None`, Streamlit's bind-to-every-interface
-default, and the theme silently vanishes too. So it is not the property of the app it reads
-like; it is a property of being launched from the repo root. `streamlit_app.py` therefore
-checks `server.address` at runtime and warns in the page when the bind is not loopback,
-because a config file cannot enforce itself. That bind matters because the page has no
-authentication — "User id" is a free-text field, so anyone who can reach the port can name
-any tenant.
-
-CWD-resolution also means the **test suite does read this file**: pytest runs from the repo
-root, so `AppTest` picks up the project config. No server is started, so `server.*` is
-inert there, but a `runner.*` or `global.*` option added here would change how tests
-execute. `langgraph dev` and the CLI are unaffected — neither is `streamlit run`.
-
-The theme defines **both** `[theme.light]` and `[theme.dark]`; a single `[theme]` block
-locks the app to one mode and removes the toggle. `primaryColor` is `#5850EC` because
-Streamlit renders white text on primary buttons, so that colour has to clear 4.5:1 against
-white *and* 3:1 against each background — the obvious indigo-500 (`#6366F1`) fails the
-first at 4.47:1, and the primary button here is the one that commits money. Note those
-measurements do **not** describe badges: given only `redColor`, Streamlit derives the badge
-fill at 10%/20% opacity and the badge text at ±15% lightness, so `st.badge(color="red")`
-renders neither the configured colour nor the pairing that was measured.
-`.streamlit/secrets.toml` is gitignored; credentials stay in `.env`.
+`.streamlit/config.toml` is committed app configuration and carries its own rationale in
+comments — read them before changing the bind or the theme (both are load-bearing: the theme
+must define `[theme.light]` *and* `[theme.dark]`, and `primaryColor` is contrast-measured
+against white button text). Two things about the file are not in it. **Streamlit resolves it
+from the CWD, not the script's directory**, so it is a property of being launched from the repo
+root rather than of the app; `streamlit_app.py` re-checks `server.address` at runtime and warns
+in the page when the bind is not loopback, because a config file cannot enforce itself — and
+that matters because the page has no authentication, "User id" being a free-text field. And
+pytest runs from the repo root too, so `AppTest` **does** read this file: `server.*` is inert
+with no server started, but a `runner.*` or `global.*` key added here changes how the suite
+executes. `.streamlit/secrets.toml` is gitignored; credentials stay in `.env`.
 
 Ruff is configured in `pyproject.toml` but is **not** a dependency — run it with
 `uvx ruff check .`. The rule set is chosen so the `# noqa` codes in the source
-(`BLE001` on the three deliberate blind excepts) suppress rules that are actually
-enabled; `RUF100` fails the check if one goes stale. `ANN401` is ignored because `Any`
+(`BLE001` on the five deliberate blind excepts — three under `src/`, two in
+`streamlit_app.py`) suppress rules that are actually enabled; `RUF100` fails the check if
+one goes stale. `ANN401` is ignored because `Any`
 is honest at the deepagents/langgraph boundary, and `tests/*` ignores `ANN`/`RUF012`
 (the fake models are Pydantic subclasses, so their list defaults are fields, not shared
 state). Formatting **is** enforced — run `uvx ruff format` before committing; CI runs
@@ -134,16 +149,13 @@ filesystem backend is the **default**, not a route:
 | `/memories/` | `StoreBackend(namespace=memory_namespace)` | Per user, across sessions |
 | `/events/` | `StoreBackend(namespace=events_namespace)` | Per user, across sessions |
 | `/artifacts/` (`ARTIFACTS_ROOT`) | `StoreBackend(namespace=artifacts_namespace)` | Per user, across sessions |
-| everything else | `ReadOnlyFilesystemBackend(root_dir=<package>/workspace/)` | Shared, and refuses writes |
+| everything else | `ReadOnlyFilesystemBackend(root_dir=<package>/workspace/, virtual_mode=True)` | Shared, and refuses writes |
 
-`/artifacts/` is deepagents' territory, not ours, and nothing in this repo writes beneath it —
-which is why it was missed. `FilesystemMiddleware` derives `<root>/large_tool_results/` and
-`<root>/conversation_history/` from the composite's `artifacts_root` and offloads on its own
-once a tool result passes `tool_token_limit_before_evict` (20k tokens) or a human message
-passes `human_message_token_limit_before_evict` (50k). The two carry different things and both
-belong to the client: a tool's output — a named account's shortlist or costed budget — and the
-planner's own typed brief, which `_evict_and_truncate_messages` takes from the last
-`HumanMessage`, never from a tool result.
+`/artifacts/` is deepagents' territory: `FilesystemMiddleware` derives
+`<root>/large_tool_results/` and `<root>/conversation_history/` from the composite's
+`artifacts_root` and offloads client data there on its own, so nothing in this repo names
+those paths at a call site — which is why the route was missed. README's Storage section has
+the token limits and what spills into each.
 
 **Route the root, never the names derived beneath it.** Those names are deepagents' to change,
 so two hardcoded prefixes fail open on a rename with nothing to go red. Routing them
@@ -161,18 +173,24 @@ per user. **Any new path holding user data needs a route in `build_backend()` pl
 namespace factory in `context.py`**, or it lands on the shared root and one planner's
 session can read another's brief.
 
-That root is `src/event_planner/workspace/` — **inside the package**, so a wheel carries
-it and an installed copy resolves its skills. It used to be `parents[2]` from `agent.py`,
-which is the repo in a checkout and `<venv>/lib/pythonX.Y` in site-packages: a directory
-that does not exist, so the backend was rooted at nothing and `skills=["/skills/"]` loaded
-none, with one deepagents WARNING and no other symptom. Deriving from the package
-directory removes the index rather than correcting it. Two consequences follow.
+That root is `src/event_planner/workspace/` — **inside the package**, derived from the package
+directory rather than by counting `parents[N]` up from `agent.py`, so a wheel carries it and an
+installed copy resolves its skills (`agent.py`'s `WORKSPACE` comment records the install that
+silently loaded none). Two consequences follow.
 `build_backend` **raises** when `skills/` is missing, on the same rule as `build_agent`
 refusing an un-gated agent. And the root **refuses every write**
 (`ReadOnlyFilesystemBackend`), because a writable directory inside the package is a file
 on the import path, and a writable `/skills/` lets whatever `web_search` returns rewrite
 the guidance every tenant's next session loads. Nothing legitimate writes there — every
-write the prompts ask for is routed. Two tests hold it:
+write the prompts ask for is routed.
+
+`virtual_mode=True` is the **read** half of that same boundary and is easy to drop, because
+the table above describes only the write half. Without it, deepagents documents the backend as
+letting an absolute path bypass `root_dir` entirely and a relative `..` escape it — so the
+agent's `ls`/`read_file`/`glob`/`grep` reach the repo's own source and anything else on disk.
+No test asserts `build_backend()` sets it; flipping it breaks nothing visible.
+
+Two tests hold the write half:
 `test_the_read_only_root_refuses_every_mutator` drives all eight methods and checks the
 file survives, and `test_the_backend_surface_has_not_moved` compares deepagents' whole
 public surface against a recorded baseline — because a check that filters `dir()` for the
@@ -204,29 +222,32 @@ Each is enforced by a test; breaking one usually produces working-looking code.
 **`interrupt_on` is a no-op without a checkpointer.** `build_agent` raises rather than
 returning an agent whose approval gates don't gate. Only `hosted=True` suppresses this.
 
+**A `store` is required too, and only the checkpointer is guarded.** With a checkpointer
+alone `build_agent` constructs fine and then dies on the first invoke — `AttributeError:
+'NoneType' object has no attribute 'get'`, raised inside `MemoryMiddleware.before_agent`,
+because `memory=["/memories/AGENTS.md"]` downloads through `StoreBackend`. Every real call
+site passes one (`cli.py`; `tests/test_harness.py`'s `_agent` defaults to `InMemoryStore()`),
+so a new entry point, repro script, or test must too — the failure names neither `store` nor
+`build_agent`.
+
 **Approval-gated tools come from one list.** `IRREVERSIBLE_TOOLS` in `tools/__init__.py`
 is the source; `INTERRUPT_ON` is derived from it. A new money-spending or guest-contacting
 tool goes in that list — never in two hand-maintained copies.
 
 **A tool rename must land on every side of the three-file loop, and three tests say so.**
-They were a PostToolUse hook (`check_prompt_drift.py`) until it was pruned; as tests they
-run in CI, on all four Python versions, and for a contributor without Claude Code.
-`test_every_bound_tool_is_named_somewhere` catches a tool the model was given but never
-told about, checked **globally** — the orchestrator names only two of its seven tools and
-delegates the rest, so a per-agent version reports five false positives.
-`test_no_prompt_instructs_a_tool_its_agent_cannot_call` is its complement and catches what
-a global check structurally cannot: binding is **per agent**, so budget-analyst's prompt
-naming `hold_venue` passes the first test (bound somewhere, named somewhere) while the
-subagent burns a turn on a tool it was never given. Its `permitted` allowlist is empty and
-must be edited deliberately — prose that names another agent's tool goes there with the
-sentence that justifies it, rather than the check being deleted. Both live in
-`test_harness.py`, whose docstring already claims this ground.
+`test_every_bound_tool_is_named_somewhere` catches a tool bound but named by no prompt,
+checked **globally** — the orchestrator names only two of its seven tools and delegates the
+rest, so a per-agent version reports five false positives.
+`test_no_prompt_instructs_a_tool_its_agent_cannot_call` is its complement and catches what a
+global check structurally cannot: binding is **per agent**, so budget-analyst's prompt naming
+`hold_venue` passes the first test while the subagent burns a turn on a tool it was never
+given. Its `permitted` allowlist is empty and must be edited deliberately — prose that names
+another agent's tool goes there with the sentence that justifies it, rather than the check
+being deleted. Both live in `test_harness.py`.
 `test_every_irreversible_tool_is_actually_bound` stays in `test_security.py` beside
 `test_every_irreversible_tool_is_gated`, which cannot see it: that one asserts
-`set(INTERRUPT_ON) == set(IRREVERSIBLE_TOOLS)` and `INTERRUPT_ON` is built from
-`IRREVERSIBLE_TOOLS`, so it holds by construction. The shared helpers (`BACKTICKED`,
-`agent_bindings`, `bound_tool_names`) live in `conftest.py` — one copy, since the rule
-against two hand-maintained copies applies to tests too.
+`set(INTERRUPT_ON) == set(IRREVERSIBLE_TOOLS)`, which holds by construction. Shared helpers
+(`BACKTICKED`, `agent_bindings`, `bound_tool_names`) live in `conftest.py`, one copy.
 
 **`respond` is excluded from `ALLOWED_DECISIONS`.** Only `approve`/`edit`/`reject`. A
 free-text reply to a booking request invites the model to read commentary as confirmation.
@@ -235,15 +256,13 @@ and `_decline_message` frames refusals as a human decision so the model doesn't 
 as a tool error and retry. `webui.SUPPORTED_DECISIONS` holds the same three and reports
 anything else as unsupported rather than rendering it.
 
-**Two front ends can now refuse a booking, and they must do it identically.**
-`webui.py` imports everything shared from `cli.py` rather than restating it —
-`_decline_message`, `_check_db_outside_workspace`, `credentials_problem`,
-`DEFAULT_MAX_STEPS`, and `_stored`/`_brief_args` (re-exported as `stored_items`/`brief_args`,
-so they are the CLI's objects, not equivalents — `test_the_shared_helpers_are_the_clis_own_objects`
-asserts identity). The wording of a refusal is behavioural, not cosmetic, and a divergent
-copy would surface only as a booking retried after a human said no;
-`test_reject_matches_the_cli_byte_for_byte` and `test_edit_matches_the_cli` drive
-`cli._prompt_one` with scripted stdin and compare its payload against the web builder's.
+**Two front ends can refuse a booking, and they must do it identically.** `webui.py` imports
+everything shared from `cli.py` rather than restating it — its module docstring carries the
+list and the reasons. Identity, not equivalence: the re-exports are the CLI's own objects and
+`test_the_shared_helpers_are_the_clis_own_objects` asserts it. The wording of a refusal is
+behavioural, not cosmetic, and a divergent copy would surface only as a booking retried after
+a human said no; `test_reject_matches_the_cli_byte_for_byte` and `test_edit_matches_the_cli`
+drive `cli._prompt_one` with scripted stdin and compare its payload against the web builder's.
 Messages that name an operator-facing knob take it as a parameter
 (`_check_db_outside_workspace(..., knob=...)`), since `--db` is meaningless to someone who
 set `EVENT_PLANNER_DB`.
@@ -271,16 +290,17 @@ own message on both the replay and the echo, and the tool-call captions). Adding
 **A collapsed `st.expander` still computes and ships its body.** Closed is a frontend
 state, not a guard — and since the page replays the whole checkpointed transcript on every
 rerun, an ungated tool-result panel re-serialises every result in the thread on every
-sidebar keystroke. Measured across the recorded threads in `.state/planner.sqlite`, tool
-output is 37-61% of all transcript text: 70.8 KB on `full-brief-3`, whose largest single
-result is 30.6 KB. `_render_tool` gates on `on_change="rerun"` plus `panel.open`, which
-makes opening a panel a full app rerun — still the cheaper side, since that rerun no longer
+sidebar keystroke. Tool output dominates transcript size — the measured share and the worst
+single result are in `_render_tool`'s docstring, taken against threads in a local
+`.state/planner.sqlite` that no fresh clone has. `_render_tool` gates on `on_change="rerun"`
+plus `panel.open`, which makes opening a panel a full app rerun — still the cheaper side,
+since that rerun no longer
 carries the other bodies, and safe beside a pending approval because `review_token` does
 not move, so an in-progress decision is restored rather than cleared.
 
 Three things follow, and each one bites silently. **The key must identify the message**:
 gating promotes the expander to a widget, widget keys must be unique, and an auto-generated
-key derives from the label — which repeats seven times on `full-brief-3`. A positional
+key derives from the label — which repeats many times in any real thread. A positional
 index will not do either, since `_render` is called from both the replay and mid-stream
 with no shared counter. **A repeated key is fatal, not cosmetic**: it raises, and an
 exception there takes the page down entirely — no transcript, no chat input, no approval
@@ -300,16 +320,25 @@ The same gate is on the approval panel's "Middleware note", keyed on the action 
 inside the fragment `rerun` reruns the fragment, and no turn is in flight to interrupt
 because the graph is parked waiting on that panel.
 
-**The approval panel is an `st.fragment`, so it must not read fresh graph state.**
-`_approval_panel` reruns in isolation on every widget change — that is the point, since
-the alternative replays the whole checkpointed transcript to redraw one segmented
-control. It is only sound because everything it needs is already resolved into its
-`reviews` argument and cannot change while the graph is parked. Adding a `graph.get_state`
-or a `snapshot.` read *inside* it reintroduces staleness that no test will catch:
-`AppTest._run` builds a fresh `LocalScriptRunner` per call and never passes a
-`fragment_id_queue`, so under test the fragment only ever executes inline during a full
-run. Submitting escapes deliberately — `st.rerun()` defaults to `scope="app"`, which is
-what lets the turn run from the main script against freshly read state.
+**The approval panel is an `st.fragment`, so it must not read graph state *while rendering*.**
+`_approval_panel` reruns in isolation on every widget change — that is the point, since the
+alternative replays the whole checkpointed transcript to redraw one segmented control. It is
+sound only because everything it *draws* is already resolved into its `reviews` argument. A
+`graph.get_state` or `snapshot.` read on the render path would serve a panel built from state
+the fragment never refreshes. `test_the_panel_reads_no_graph_state_while_rendering` pins it by
+counting reads rather than inspecting the source, since the hazard is a call anywhere in the
+panel including inside a helper — and counting is what stands in for the fragment-scoped rerun
+`AppTest` cannot drive (it builds a fresh `LocalScriptRunner` per call and passes no
+`fragment_id_queue`, so under test the fragment only ever executes inline during a full run).
+
+**The one graph read that belongs there is at submit time, and it is load-bearing.** `reviews`
+is as old as the last *full* run, so another browser tab or a CLI turn on the same thread can
+answer this interrupt first. After the operator commits, the panel re-reads live state,
+compares `_review_tokens` against its own, and sets `stale_approval` — surfaced as a warning
+on the next full run — instead of resuming a graph that is no longer asking. That is a
+compare-and-swap, not a render, which is why it does not violate the rule above; the `graph`
+and `config` arguments the panel takes exist for it. `st.rerun()` then defaults to
+`scope="app"`, which is what lets the turn run from the main script against fresh state.
 
 **A disabled Streamlit button became a guard, and the reason to distrust it still stands.**
 On 1.60 `disabled=` was presentation: it stopped a click in the browser and said nothing about
@@ -325,26 +354,23 @@ passes whether or not the guard is there.
 forcing the button to report a click — the only way left to exercise the case the guard is
 for.
 
-**Approval widget identity also carries the turn attempt, not just the checkpoint.**
-`review_token` mixes in the checkpoint id, which only advances when the graph does — so a
-resume that raises *before* any state change (locked database, 429, server reaped mid-turn)
-rebuilds the panel under an identical token, and Streamlit restores the decision the
-operator just submitted: primary button live, one reflexive click from executing a booking
-nobody re-confirmed. `streamlit_app.py` bumps `st.session_state.turn_attempt` on every
-attempt and prefixes the token with it, so a failed turn costs a deliberate re-decision.
-`test_a_failed_resume_does_not_leave_the_panel_pre_armed` drives it with a graph that
-raises before advancing.
-
-**Approval widget keys follow the action, never its position.** Streamlit restores a
-keyed widget's value whenever a widget with that key renders again. With `key=f"choice-{index}"`,
-resolving one approval and immediately interrupting for a *different* action reused the key,
-so the new panel rendered pre-approved with submit enabled — one click executing something
-nobody reviewed. `edit` was worse: a stored value beats the `value=` argument, so the new
-action's box came back holding the previous action's arguments and would have executed the
-wrong tool with them. `webui.review_token` mixes in the checkpoint id (fresh per interrupt,
-stable across the reruns *within* one approval, which is what lets a selection survive long
-enough to submit) plus the action name and args.
-`test_a_second_interrupt_is_not_pre_approved` guards it.
+**Approval widget identity follows the action and the attempt — never position alone.**
+Streamlit restores a keyed widget's value whenever a widget with that key renders again. With
+`key=f"choice-{index}"`, resolving one approval and immediately interrupting for a *different*
+action reused the key, so the new panel rendered pre-approved with submit enabled — one click
+executing something nobody reviewed. `edit` was worse: a stored value beats the `value=`
+argument, so the new action's box came back holding the previous action's arguments and would
+have executed the wrong tool with them. `webui.review_token` therefore hashes four things —
+checkpoint id, index, action name, args. The checkpoint id is fresh per interrupt but stable
+across the reruns *within* one approval, which is what lets a selection survive long enough to
+submit; the index is still needed because two actions in one interrupt share a checkpoint, so
+dropping it collides their widgets. `streamlit_app.py` additionally prefixes
+`st.session_state.turn_attempt`, because a resume that raises *before* the graph advances
+(locked database, 429, server reaped mid-turn) leaves the checkpoint id identical and would
+rebuild the panel pre-armed with the decision just submitted. Guarded by
+`test_a_second_interrupt_is_not_pre_approved`,
+`test_widget_identity_changes_per_pending_action`, and
+`test_a_failed_resume_does_not_leave_the_panel_pre_armed`.
 
 **An interrupt payload the page cannot parse must fail closed.** `pending_reviews` returns
 `[]` for an unrecognised shape, and an empty result rendered the ordinary chat input — so a
@@ -380,13 +406,16 @@ reason. With no id, storage scopes to the thread.
 **Store keys are untrusted paths.** `cli._export` treats them as agent-chosen input and
 validates against traversal before writing to `exports/`.
 
-**The step budget is `6 + 4N` for N tool round trips.** Five middleware nodes run per model
-turn (three `before_agent`, two `after_model`), and LangGraph counts each as a super-step.
-LangGraph's own default of 25 never applies: `create_deep_agent` binds
-`recursion_limit: 9_999` onto the compiled graph, so the front ends' `DEFAULT_MAX_STEPS = 200`
-*lowers* that ceiling rather than raising it from 25. Dropping the explicit limit uncaps a
-runaway session to 9999; it does not strand one at 25. Adding middleware changes this
-constant — `test_step_budget_survives_a_long_planning_session` guards it.
+**The step budget is `6 + 4N` for N tool round trips.** LangGraph counts every node as a
+super-step, and the two kinds of middleware node do not run at the same rate: the three
+`before_agent` nodes (Skills, PatchToolCalls, Memory) run **once per invocation**, the two
+`after_model` nodes (HumanInTheLoop, TodoList) run **per model call**. That asymmetry is what
+`6 + 4N` encodes — counting all five per turn predicts 13 steps for one round trip against the
+10 measured, and `test_harness.py`'s comment warns against exactly that misreading. README's
+"Step budget" has the trace, and explains why the front ends' `DEFAULT_MAX_STEPS = 200`
+*lowers* `create_deep_agent`'s `recursion_limit: 9_999` rather than raising LangGraph's
+default 25. Adding middleware changes this constant —
+`test_step_budget_survives_a_long_planning_session` guards it.
 
 ## deepagents 0.7.9 vs. published docs
 

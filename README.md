@@ -64,7 +64,7 @@ uv run event-planner --user alice@example.com         # scoped memory
 uv run event-planner --thread offsite-2026            # named conversation
 uv run event-planner --max-steps 400                  # longer planning session
 uv run streamlit run streamlit_app.py                 # browser UI
-uv run langgraph dev                                  # LangGraph Studio
+uv run --with "langgraph-cli[inmem]" langgraph dev    # LangGraph Studio
 uv run pytest                                         # harness tests
 ```
 
