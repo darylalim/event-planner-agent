@@ -1,20 +1,31 @@
 # Configuration for the Streamlit front end (`uv run streamlit run streamlit_app.py`).
 #
-# Streamlit resolves this file from the **current working directory**, not from
-# the directory holding the script — so everything below applies when the app is
-# launched from the repo root and silently does not otherwise. That includes
-# `pytest`, which also runs from the repo root: no server is started, so the
-# `[server]` block is inert there, but a `runner.*` or `global.*` option added
-# here would change how the test suite executes. `langgraph dev` and the CLI
-# never read it.
+# Under `streamlit run` this is **script-level** config. Streamlit appends
+# `<script dir>/.streamlit/config.toml` last, "so that it overwrites project &
+# global level config files", and it derives that path from the script rather
+# than from the shell — so everything below applies from any working directory.
+# Verified by launching from an unrelated directory and reading `server.address`
+# back as 127.0.0.1. An earlier note here claimed the opposite; it was wrong, and
+# it sent the runtime warning's remediation to a knob that changes nothing.
+#
+# What does outrank this file is a `--server.address` flag or the
+# `STREAMLIT_SERVER_ADDRESS` environment variable.
+#
+# `pytest` is the one place the old note was right, for a different reason:
+# AppTest never sets a main script path, so the suite reads this file only as
+# *project-level* config, which works because pytest runs from the repo root. No
+# server is started, so `[server]` is inert there — but a `runner.*` or
+# `global.*` option added here would change how the suite executes.
+# `langgraph dev` and the CLI never read it.
 
 [server]
 # There is no authentication in front of this page. "User id" is a free-text
 # field, so anyone who can reach the port can name any tenant and read that
 # tenant's memories and event files. Streamlit's default binds every interface,
-# so this is the safe default made explicit — but see the CWD caveat above: a
-# config file cannot enforce itself, and `streamlit_app.py` checks this option
-# at startup and warns in the page when the effective bind is not loopback.
+# so this is the safe default made explicit — but a config file cannot enforce
+# itself, and a flag or `STREAMLIT_SERVER_ADDRESS` overrides it, so
+# `streamlit_app.py` checks this option at startup and warns in the page when the
+# effective bind is not loopback.
 #
 # Serving this on a routable address is a deliberate act: override it on the
 # command line (`--server.address 0.0.0.0`) and put an auth layer in front.

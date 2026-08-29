@@ -73,6 +73,7 @@ __all__ = [
     "degraded_capability_note",
     "download_name",
     "edit_decision",
+    "markdown_literal",
     "markdown_safe",
     "message_text",
     "open_persistence",
@@ -126,8 +127,37 @@ def tool_calls_of(message: Any) -> list[dict[str, Any]]:
     return list(getattr(message, "tool_calls", None) or [])
 
 
-#: A `$` that Streamlit's markdown would treat as opening or closing LaTeX.
-_BARE_DOLLAR = re.compile(r"(?<!\\)\$")
+#: Regions where a `$` cannot open a maths span, and where a backslash before it
+#: would therefore be rendered rather than consumed. Alternation order is not the
+#: safety property — `re` takes the leftmost match and only then prefers an
+#: earlier arm at that same offset — so each arm has to be correct on its own.
+#:
+#: Three things here are deliberate and each one was a leak before it was:
+#:
+#: * The closing fence is `{3,}` rather than a backreference to the opener.
+#:   CommonMark lets a block opened with ``` close with ````, and an exact
+#:   backreference misses that; the `|\Z` arm then swallowed the rest of the
+#:   message and every `$` after the block went out bare.
+#: * `\r?$` on both closing fences, because `$` under MULTILINE matches only
+#:   before `\n` and `\r` is neither space nor tab — so with CRLF input *no*
+#:   fence closed, with the same swallow-to-end-of-string result.
+#: * The code-span arm cannot cross a blank line. CommonMark parses blocks first,
+#:   so backticks in two different paragraphs never pair; `[\s\S]*?` paired them
+#:   anyway and invented a "safe" region over whole paragraphs of costs. One
+#:   unbalanced backtick — trivially common in planner prose, and guaranteed in a
+#:   message truncated mid-span by streaming — was enough.
+#:
+#: The `|\Z` arms stay, for the genuine case they were added for: a message
+#: rendered mid-stream that ends before its closing fence arrives.
+_SAFE_REGIONS = re.compile(
+    r"(?P<url><[^ <>\n]+>|\b(?:https?://|www\.)[^\s<>]+)"
+    r"|(?P<fence>^[ \t]{0,3}(?:"
+    r"`{3,}[^`\n]*\n.*?(?:^[ \t]{0,3}`{3,}[ \t]*\r?$|\Z)"
+    r"|~{3,}[^\n]*\n.*?(?:^[ \t]{0,3}~{3,}[ \t]*\r?$|\Z)))"
+    r"|(?P<span>(?P<inline>`+)(?:[^\n]|\n(?![ \t]*\r?\n))*?(?P=inline))"
+    r"|(?P<dollar>(?<!\\)\$)",
+    re.MULTILINE | re.DOTALL,
+)
 
 
 def markdown_safe(text: str) -> str:
@@ -142,8 +172,47 @@ def markdown_safe(text: str) -> str:
     the totals an operator is asked to check ("$10,281 ... $1,719 under your
     $12,000 ceiling") rendered as an equation. Escaping every bare `$` costs the
     model the ability to emit LaTeX, which for this domain is the right trade.
+
+    The escape stops at code spans, fenced blocks and URLs, and stopping there
+    costs nothing: CommonMark does not process backslash escapes inside code, so
+    the backslash is *rendered* — a fenced budget table came out as `\\$3,200` —
+    and the maths tokenizer never fires inside code either, so there was never
+    anything to prevent. Planner prose carries backticked store paths and fenced
+    tables routinely, and the operator's own echoed message gets the same pass,
+    so a pasted `export CAP=$12000` was being shown back with a stray backslash.
     """
-    return _BARE_DOLLAR.sub(r"\\$", text)
+    return _SAFE_REGIONS.sub(
+        lambda match: r"\$" if match.group("dollar") is not None else match.group(0),
+        text,
+    )
+
+
+#: The GFM inline metacharacters, substituted in one pass over a character class
+#: so the backslash this inserts cannot itself be escaped a second time. Not
+#: "everything markdown reads" — a bare `https://…` still autolinks, and there is
+#: no escaping a URL out of that short of mangling it. That is the acceptable
+#: residue: an autolink displays its own text unchanged, so the operator still
+#: reads the value that is there. `*loft*` losing its asterisks does not.
+_MD_LITERAL = re.compile(r"([\\`*_~\[\]<>$])")
+
+
+def markdown_literal(text: str) -> str:
+    """Render agent-chosen text as itself, not as markup.
+
+    `markdown_safe` is for prose that is *meant* to be markdown, minus LaTeX.
+    This is for the values interpolated beside it — tool arguments and store
+    keys — which the model chose and which no one intends to be formatted. Both
+    reach commands that parse GFM: `st.caption`, and `st.download_button`'s
+    label, where only block-level markdown is auto-escaped.
+
+    Left unescaped, an argument of `query='rooftop *loft*'` shows the operator
+    "rooftop loft" in italics — arguments that differ from the ones that would
+    execute, in the one panel built for checking them — and a message argument
+    carrying `[details](https://…)` renders as a live link whose text hides its
+    target. Both are fixed here. A bare URL still autolinks, which is left alone
+    deliberately: the rendered text equals the raw value, so nothing is hidden.
+    """
+    return _MD_LITERAL.sub(r"\\\1", text)
 
 
 # --------------------------------------------------------------------------- #

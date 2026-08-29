@@ -25,6 +25,7 @@ from event_planner.webui import (
     approve_decision,
     download_name,
     edit_decision,
+    markdown_literal,
     markdown_safe,
     message_text,
     open_persistence,
@@ -109,7 +110,9 @@ def test_two_costs_on_one_line_do_not_become_latex():
     """
     rendered = markdown_safe("Venue $3,200 · AV $1,900 · Catering $4,050")
     assert rendered == r"Venue \$3,200 · AV \$1,900 · Catering \$4,050"
-    # Nothing left that Streamlit would pair off into a maths span.
+    # Nothing left that Streamlit would pair off into a maths span. Stated over
+    # prose specifically: the escape deliberately stops at code spans, fenced
+    # blocks and URLs, where a `$` cannot open one and a backslash would show.
     assert "$" not in rendered.replace(r"\$", "")
 
 
@@ -129,6 +132,99 @@ def test_text_without_costs_is_untouched():
     assert markdown_safe("Dogpatch Studio, Thursday 12 March 2026.") == (
         "Dogpatch Studio, Thursday 12 March 2026."
     )
+
+
+def test_a_cost_inside_a_code_span_keeps_its_dollar():
+    """CommonMark does not process escapes inside code, so a backslash renders.
+
+    And nothing is bought by escaping there: the maths tokenizer never fires
+    inside a code span either. Planner prose carries backticked store paths and
+    figures routinely, so the escape was showing up as visible punctuation.
+    """
+    assert markdown_safe("Cap is `$12,000` exactly") == "Cap is `$12,000` exactly"
+
+
+def test_a_fenced_budget_table_is_left_alone():
+    fence = "```\nVenue    $3,200\nexport BUDGET=$TOTAL\n```"
+    assert markdown_safe(fence) == fence
+
+
+def test_a_fence_that_never_closes_is_still_left_alone():
+    """A message rendered mid-stream can end before its closing fence arrives."""
+    partial_fence = "```\nVenue    $3,200\n"
+    assert markdown_safe(partial_fence) == partial_fence
+
+
+def test_a_url_carrying_a_dollar_is_not_escaped():
+    """A backslash inside a bare URL breaks the link rather than the maths."""
+    assert markdown_safe("See https://x.example/a$b now") == "See https://x.example/a$b now"
+
+
+def test_prose_around_code_is_still_escaped():
+    """The regions are skipped; everything between them is not."""
+    assert markdown_safe("Total $9 vs `$12` cap") == r"Total \$9 vs `$12` cap"
+
+
+#: The sentence the whole escaper exists for, reused below.
+MONEY = "Total $10,281 — $1,719 under your $12,000 ceiling"
+
+
+def _leaks(rendered):
+    """True if any `$` survives unescaped after the money marker."""
+    tail = rendered.split("Total", 1)[-1]
+    return "$" in tail.replace(r"\$", "")
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        # A lone backtick is literal in CommonMark and cannot pair across a
+        # paragraph break. Pairing them anyway invented a "safe" region over
+        # whole paragraphs of costs and shipped them to KaTeX unescaped.
+        ("an unpaired backtick two paragraphs earlier", "Use ` carefully.\n\n" + MONEY),
+        # Truncation mid-span is guaranteed, not hypothetical: the page renders
+        # partial assistant text on every stream chunk.
+        ("a span left open by streaming", "See `search_ven\n\n" + MONEY),
+        # `$` under MULTILINE matches only before `\n`, and `\r` is neither space
+        # nor tab — so with CRLF no fence closed and `\Z` swallowed the rest.
+        ("a CRLF fenced block", "```\r\nVenue $3,200\r\n```\r\n\r\n" + MONEY),
+        # CommonMark lets a ``` block close with ````. An exact backreference
+        # missed that, and `\Z` swallowed everything after it.
+        ("a fence opened with 3 and closed with 4", "```\nVenue $3,200\n````\n\n" + MONEY),
+        ("a tilde fence", "~~~\nVenue $3,200\n~~~\n\n" + MONEY),
+    ],
+)
+def test_a_malformed_region_never_swallows_the_money(name, text):
+    """Every one of these left real costs bare, which is the live bug itself.
+
+    A region arm that matches too much is worse than no arm at all: the old
+    unconditional escape was safe and merely ugly inside code, while a greedy
+    region is unsafe exactly where this function is load-bearing.
+    """
+    assert not _leaks(markdown_safe(text)), name
+
+
+# --------------------------------------------------------------------------- #
+# agent-chosen values are data, not markup
+# --------------------------------------------------------------------------- #
+
+
+def test_tool_arguments_render_as_themselves():
+    """`st.caption` renders GFM, and these are the model's own argument values.
+
+    Unescaped, the operator is shown arguments that differ from the ones that
+    would execute — in the panel whose entire job is checking them.
+    """
+    assert markdown_literal("query='rooftop *loft*'") == r"query='rooftop \*loft\*'"
+
+
+def test_a_link_in_an_argument_does_not_become_a_link():
+    assert markdown_literal("[details](https://x.example)") == r"\[details\](https://x.example)"
+
+
+def test_markdown_literal_does_not_double_escape_its_own_backslash():
+    """One pass over a character class, so the inserted backslash is not re-read."""
+    assert markdown_literal(r"a\b") == r"a\\b"
 
 
 # --------------------------------------------------------------------------- #
@@ -507,6 +603,29 @@ def test_stored_items_reads_back_what_the_agent_wrote(tmp_path):
     items, used = stored_items(store, "alice@example.com", "events")
     assert used == namespace
     assert [item.key for item in items] == ["/events/offsite/brief.md"]
+
+
+def test_stored_items_lists_past_the_stores_default_page(tmp_path):
+    """`store.search` defaults to `limit=10`, and says so nowhere at the call site.
+
+    The browser's "Stored" panel showed at most ten of each kind and `cli._export`
+    wrote ten files while printing the count as the whole set — silently, with no
+    error and no truncation marker. Sized past two pages so an off-by-one in the
+    paging loop cannot pass.
+    """
+    _, store = open_persistence(tmp_path / "planner.sqlite")
+    from event_planner.context import namespace_for_user
+
+    namespace = namespace_for_user("alice@example.com", "events")
+    for index in range(230):
+        store.put(namespace, f"/events/e{index:03d}.md", {"content": str(index)})
+
+    assert len(list(store.search(namespace))) == 10, "the default this exists to defeat"
+
+    items, _ = stored_items(store, "alice@example.com", "events")
+    keys = [item.key for item in items]
+    assert len(keys) == 230
+    assert len(set(keys)) == 230, "a paging loop that re-reads a page duplicates"
 
 
 # --------------------------------------------------------------------------- #

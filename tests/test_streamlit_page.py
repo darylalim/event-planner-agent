@@ -59,8 +59,20 @@ def _interrupt(allowed=("approve", "edit", "reject"), actions=(HOLD,)):
 class FakeGraph:
     """Stands in for the compiled graph: records what a decision resumes with."""
 
-    def __init__(self, interrupt=None, messages=(), next_nodes=(), then=None, stream_error=None):
+    def __init__(
+        self,
+        interrupt=None,
+        messages=(),
+        next_nodes=(),
+        then=None,
+        stream_error=None,
+        stream_updates=(),
+    ):
         self.sent = []
+        # Update chunks the turn yields, shaped like real `stream_mode="updates"`
+        # output. Empty by default, which is what every case that only cares
+        # about *what was sent* wants.
+        self.stream_updates = list(stream_updates)
         # Raised instead of advancing, modelling the dangerous shape of failure:
         # the turn dies before any state change, so the checkpoint id — and hence
         # `review_token` — is unchanged when the panel renders again.
@@ -103,7 +115,7 @@ class FakeGraph:
         self.interrupt = self.then
         self.then = None
         self.next_nodes = ("tools",) if self.interrupt else ()
-        return iter([])
+        return iter(self.stream_updates)
 
     @property
     def decisions(self):
@@ -115,9 +127,15 @@ def page(tmp_path, monkeypatch):
     """Run the real page against a fake graph and return `(AppTest, FakeGraph)`."""
 
     def _run(
-        interrupt=None, messages=(), api_key=True, next_nodes=(), then=None, stream_error=None
+        interrupt=None,
+        messages=(),
+        api_key=True,
+        next_nodes=(),
+        then=None,
+        stream_error=None,
+        stream_updates=(),
     ):
-        fake = FakeGraph(interrupt, messages, next_nodes, then, stream_error)
+        fake = FakeGraph(interrupt, messages, next_nodes, then, stream_error, stream_updates)
         monkeypatch.setattr("event_planner.agent.build_agent", lambda **_kwargs: fake)
         monkeypatch.setenv("EVENT_PLANNER_DB", str(tmp_path / "planner.sqlite"))
 
@@ -176,6 +194,197 @@ def test_a_typed_brief_reaches_the_graph(page):
     assert fake.sent == [
         {"messages": [{"role": "user", "content": "85 guests in SF, $45k ceiling"}]}
     ]
+
+
+def test_a_submitted_brief_streams_its_turn_in_the_same_run(page):
+    """The submit and the turn are one run, not two.
+
+    Read at the bottom of the script, a chat submission could only stash the
+    message and rerun, so the operator paid a whole discarded render — a full
+    `get_state` deserialisation, a walk of every message, three store searches —
+    between pressing Enter and the turn starting. `on_submit` fires before the
+    script body of the rerun the submission already causes, so `turn_pending` is
+    true by the time the transcript renders.
+
+    Counted through `get_state`, because that is the cost being removed: one run
+    reads once before the turn and once after it.
+    """
+    at, fake = page()
+    before = fake.reads
+    at.chat_input[0].set_value("85 guests in SF").run()
+    assert fake.sent == [{"messages": [{"role": "user", "content": "85 guests in SF"}]}]
+    assert fake.reads - before == 2, "a discarded pre-turn run would add two more"
+
+
+def _ai(text, *, identifier, calls=()):
+    """An assistant message shaped like a real `AIMessage`, id included.
+
+    The id is the whole point here: `add_messages` dedupes on it, and so does
+    the page's replay-versus-stream reconciliation.
+    """
+    return SimpleNamespace(type="ai", content=text, tool_calls=list(calls), id=identifier)
+
+
+def test_a_resumed_proposal_is_replaced_rather_than_drawn_twice(page):
+    """One message, two sources, and for `edit` they disagree.
+
+    `HumanInTheLoopMiddleware.after_model` re-emits the proposing message as its
+    node update, and the model node that produced it was checkpointed a
+    super-step earlier — so on the run that resumes a decision the replay and the
+    stream both carry it. Appending both drew two assistant bubbles: identical
+    for approve and reject, and for `edit` *different*, the replayed copy showing
+    the model's arguments and the streamed copy the operator's, with nothing
+    saying which one executed.
+
+    It corrects itself on the next rerun. The run it is wrong on is the run that
+    commits a booking, which is the one an operator reads.
+    """
+    at, _ = page(
+        messages=[
+            _ai(
+                "Holding the loft.",
+                identifier="m-1",
+                calls=[
+                    {"name": "hold_venue", "args": {"headcount": 60}},
+                ],
+            )
+        ],
+        stream_updates=[
+            {
+                "model": {
+                    "messages": [
+                        _ai(
+                            "Holding the loft.",
+                            identifier="m-1",
+                            calls=[
+                                {"name": "hold_venue", "args": {"headcount": 45}},
+                            ],
+                        ),
+                    ]
+                }
+            }
+        ],
+    )
+    at.chat_input[0].set_value("go ahead").run()
+
+    assert not at.exception
+    holds = [c.value for c in at.caption if "hold_venue" in c.value]
+    assert len(holds) == 1, f"drawn {len(holds)} times: {holds}"
+    # The re-emitted copy wins, so the arguments left on screen are the ones
+    # that ran — not the ones the model first proposed.
+    assert "headcount=45" in holds[0]
+
+
+def test_a_stored_files_download_carries_its_real_content(page, tmp_path, monkeypatch):
+    """Drive the deferred `data=` callable, which nothing offline had ever called.
+
+    `DownloadButton.click()` in AppTest only sets the widget value; nothing in
+    that stack calls `execute_deferred`. So a `_content_of` that raised, or that
+    returned a shape the media endpoint rejects, passed the whole suite — and a
+    legacy list-shaped store value does exactly that, with
+    `MediaFileStorageError: Callable returned unsupported type`.
+
+    Two internals are load-bearing and worth naming rather than rediscovering.
+    `Runtime._instance` is set to `None` at the end of every `at.run()`, so the
+    manager has to be captured *during* the run. And the file id the proto
+    carries is the deferred placeholder, not the stored file — `execute_deferred`
+    is what turns one into the other.
+    """
+    from streamlit.runtime.media_file_manager import MediaFileManager
+
+    from event_planner.context import namespace_for_user
+    from event_planner.webui import download_name, open_persistence
+
+    _, store = open_persistence(tmp_path / "planner.sqlite")
+    store.put(
+        namespace_for_user("alice@example.com", "events"),
+        "/events/offsite/brief.md",
+        {"content": "# Brief\n\n85 guests"},
+    )
+
+    managers = []
+    original_init = MediaFileManager.__init__
+
+    def _capture(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        managers.append(self)
+
+    monkeypatch.setattr(MediaFileManager, "__init__", _capture)
+
+    at, _ = page()
+    at.text_input(key="user").set_value("alice@example.com").run()
+    assert not at.exception
+
+    buttons = at.download_button
+    assert len(buttons) == 1, "the seeded file should be listed once"
+    assert managers, "no MediaFileManager was constructed during the run"
+
+    manager = managers[-1]
+    url = manager.execute_deferred(buttons[0].proto.deferred_file_id)
+    stored = manager._storage.get_file(url.rsplit("/", 1)[-1])
+
+    assert stored.content == b"# Brief\n\n85 guests"
+    assert stored.filename == download_name("/events/offsite/brief.md")
+
+
+def test_the_committed_figures_follow_the_edit_not_the_proposal(page):
+    """The headline number must be the one that executes.
+
+    An earlier version of this row rendered `action["args"]` above the decision
+    widgets. That put the model's figure in the largest, boldest element on a
+    panel the operator had already overridden — the same "shows one thing,
+    executes another" hazard this page escapes tool arguments to avoid, at
+    greater visual weight, on the one panel that spends money.
+
+    Nothing renders before a decision is picked: with no choice there is nothing
+    committed to show, and the two-step gate is what that emptiness expresses.
+    """
+    action = {
+        "name": "hold_venue",
+        "args": {"venue_id": "v-loft", "headcount": 60, "total_cost_usd": 10281},
+    }
+    at, _ = page(
+        interrupt={
+            "action_requests": [action],
+            "review_configs": [{"allowed_decisions": ["approve", "edit", "reject"]}],
+        }
+    )
+    assert at.metric == [], "nothing is committed until a decision is picked"
+
+    at.segmented_control[0].set_value("approve").run()
+    assert [(m.label, m.value) for m in at.metric] == [
+        ("headcount", "60"),
+        ("total_cost_usd", "10281"),
+    ]
+
+    at.segmented_control[0].set_value("edit").run()
+    box = next(t for t in at.text_area if "Arguments" in t.label)
+    box.set_value('{"venue_id": "v-loft", "headcount": 45, "total_cost_usd": 8100}').run()
+
+    assert not at.exception
+    assert [(m.label, m.value) for m in at.metric] == [
+        ("headcount", "45"),
+        ("total_cost_usd", "8100"),
+    ], "the panel is still showing the model's proposal, not what would execute"
+
+
+def test_an_unusable_args_shape_does_not_take_the_panel_down(page):
+    """The interrupt payload is deepagents' to shape, not this page's to trust.
+
+    An exception inside the approval panel takes the whole page down with a
+    booking still parked — the same outcome `_panel_key` exists to prevent — so
+    an args value that is not a dict yields no figures rather than raising.
+    """
+    at, _ = page(
+        interrupt={
+            "action_requests": [{"name": "hold_venue", "args": ["not", "a", "dict"]}],
+            "review_configs": [{"allowed_decisions": ["approve", "reject"]}],
+        }
+    )
+    at.segmented_control[0].set_value("approve").run()
+    assert not at.exception
+    assert at.metric == []
+    assert at.button, "the panel still renders its submit button"
 
 
 # --------------------------------------------------------------------------- #

@@ -20,7 +20,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.12.5`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 212 tests, ~6s, fully offline
+uv run pytest                              # 224 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -95,19 +95,23 @@ class — `test_the_real_shared_root_refuses_a_write` makes it in a plain checko
 re-asserts it against the installed copy.
 
 `.streamlit/config.toml` is committed app configuration and its header carries the rationale —
-read it before changing the bind or the theme. It already covers CWD resolution (the file
-applies only when launched from the repo root, and **`pytest` reads it too**, so a `runner.*` or
-`global.*` key added there changes how the suite executes), why the bind matters with no
-authentication in front of the page, and why the theme needs both `[theme.light]` and
-`[theme.dark]`. The one thing not in it: a config file cannot enforce itself, so
+read it before changing the bind or the theme. It already covers config resolution — under
+`streamlit run` the file is **script-level** and therefore applies from any CWD, while
+**`pytest` reads it as project-level** (AppTest sets no script path, and the suite runs from
+the repo root), so a `runner.*` or `global.*` key added there still changes how the suite
+executes — plus why the bind matters with no authentication in front of the page, and why the
+theme needs both `[theme.light]` and `[theme.dark]`. An earlier note in all four of these
+files claimed config came from the *working directory*; it was wrong, and it aimed the runtime
+warning's remedy at a knob that changes nothing. The thing the config cannot do is enforce
+itself — a `--server.address` flag or `STREAMLIT_SERVER_ADDRESS` overrides it — so
 `streamlit_app.py` re-checks `server.address` at runtime and warns in the page when the bind is
 not loopback. `.streamlit/secrets.toml` is gitignored; credentials stay in `.env`.
 
 Ruff is configured in `pyproject.toml` but is **not** a dependency — run it with
 `uvx ruff check .`. The rule set is chosen so the `# noqa` codes in the source
-(`BLE001` on the five deliberate blind excepts — three under `src/`, two in
-`streamlit_app.py`) suppress rules that are actually enabled; `RUF100` fails the check if one
-goes stale. `ANN401` is ignored because `Any` is honest at the deepagents/langgraph
+(`BLE001` on the seven deliberate blind excepts — three under `src/`, four in
+`streamlit_app.py`, two of them the guards on `graph.get_state`) suppress rules that are
+actually enabled; `RUF100` fails the check if one goes stale. `ANN401` is ignored because `Any` is honest at the deepagents/langgraph
 boundary, and `tests/*` ignores `ANN`/`RUF012`
 (the fake models are Pydantic subclasses, so their list defaults are fields, not shared
 state). Formatting **is** enforced — run `uvx ruff format` before committing; CI runs
@@ -288,16 +292,49 @@ sets `journal_mode=WAL` and a 30s busy timeout; in rollback-journal mode a CLI t
 write lock makes a concurrent browser turn fail outright with "database is locked", which the
 page can only report as a lost turn. Connections are also closed on cache eviction via
 `close_persistence` — `st.cache_resource(max_entries=...)` bounds how many entries it keeps but
-does not close what it drops, and the cache key includes a free-text model field.
+does not close what it drops, and the cache key includes a free-text model field. That cache is
+`scope="session"` rather than the default `"global"` for the same reason: process-wide, the
+fifth distinct model string typed in *any other* browser session evicts this session's entry,
+and `on_release` then closes both connections out from under a `graph.stream` still running on
+them. Nothing refcounts them, `validate=` does not help (it runs on the entry still in cache),
+and a larger `max_entries` only postpones it.
 
 **Model prose reaches `st.markdown`, which renders `$...$` as LaTeX.** Any line quoting
 two costs — which in this domain is most of them — has the span between them swallowed and
 re-set as italic mathematics. Seen live on the `hold_venue` recommendation: "$10,281 —
 $1,719 under your $12,000 ceiling" rendered as an equation. `webui.markdown_safe` escapes
-bare `$` and every render path in the page goes through it (assistant prose, the operator's
-own message on both the replay and the echo, and the tool-call captions). Adding a new
-`st.markdown`/`st.caption` that carries model or operator text needs it too; `st.code` and
-`st.json` do not, since neither parses markdown.
+bare `$` on every prose render path (assistant text, the operator's own message on both the
+replay and the echo).
+
+It stops at code spans, fenced blocks and URLs, and stopping there is not a gap: CommonMark
+does not process escapes inside code, so the backslash was being *rendered* — a fenced budget
+table came out as `\$3,200` — and the maths tokenizer never fires inside code either, so
+there was nothing to prevent.
+
+**Interpolated agent values take the other helper.** `webui.markdown_literal` escapes the GFM
+inline metacharacters, and the tool-call captions and the download-button labels use it rather
+than `markdown_safe`: those are the model's own argument values and store keys, which nobody
+intends to be formatted. Left as markdown, `query='rooftop *loft*'` showed the operator
+italics and no asterisks — arguments that differ from the ones that would execute, in the
+panel whose whole job is checking them. So a new `st.markdown`/`st.caption` carrying model or
+operator text needs one of the two — prose takes `markdown_safe`, values take
+`markdown_literal`; `st.code` and `st.json` need neither, since neither parses markdown.
+
+It is *not* "everything markdown reads": a bare `https://…` still autolinks, and escaping a
+URL out of that would mean mangling the value. That residue is deliberate and it is the line
+worth holding — an autolink renders its own text unchanged, so the operator still reads the
+value that is there, while `*loft*` losing its asterisks means they do not.
+
+**`markdown_safe`'s region arms have to be conservative, and each one was a leak first.** A
+region arm that matches too much is worse than no arm at all: the old unconditional escape
+was merely ugly inside code, while a greedy region ships real costs to KaTeX. Three arms are
+written the way they are for measured reasons — the closing fence is `{3,}` rather than a
+backreference (CommonMark lets ``` close with ````), both closing fences carry `\r?` (`$`
+under MULTILINE matches only before `\n`, so CRLF closed no fence at all), and the code-span
+arm cannot cross a blank line (backticks in two paragraphs never pair in CommonMark, and one
+unbalanced backtick — guaranteed in a message truncated mid-span by streaming — otherwise
+made whole paragraphs of money "code"). In each case the `|\Z` arm then swallowed the rest of
+the message. `test_a_malformed_region_never_swallows_the_money` is the parametrised guard.
 
 **A collapsed `st.expander` still computes and ships its body.** Closed is a frontend
 state, not a guard — and since the page replays the whole checkpointed transcript on every
@@ -327,6 +364,41 @@ the chat box. Guarded by `test_a_collapsed_tool_result_is_not_sent_to_the_browse
 `test_repeated_tool_names_get_distinct_panels`, `test_an_opened_panel_renders_its_body`,
 `test_two_results_sharing_one_call_id_do_not_kill_the_page`, and
 `test_panels_are_inert_on_a_run_that_streams_a_turn`.
+
+**Nothing that queues a rerun may stay live while a turn streams, and the rule is wider than
+the tool panels it was written for.** `RerunException` subclasses `BaseException`, so the
+turn's `except Exception` misses it and `graph.stream` is abandoned with nothing shown — on a
+turn that ran 672s live. `submit_mode="disable"` and `gated=not turn_pending` were the first
+two answers; the sidebar's three text inputs and the stored-file downloads were both still
+live in that window. The downloads now take `on_click="ignore"`, which is the clean fix: it
+removes the rerun at the source rather than the click, so nothing has to be lifted afterwards
+and a download needs no server-side rerun anyway (the bytes come over a separate media URL).
+
+**The sidebar fields deliberately keep no such gate, and the reason generalises.**
+`disabled=turn_pending` is the obvious fix and it cannot lift: `turn_pending` is read once per
+run, and the run that consumes `pending_input` draws the sidebar disabled from top to bottom,
+so the only way back to a live sidebar is a second run after the turn. That rerun makes the
+*entire streaming run* invisible to `AppTest` — which is where this page's invariants are
+pinned — taking `test_panels_are_inert_on_a_run_that_streams_a_turn` and
+`test_a_resumed_proposal_is_replaced_rather_than_drawn_twice` green-for-the-wrong-reason with
+it. Both were measured doing exactly that before the gate was reverted. Trading a tested
+invariant for an untested one is the wrong direction here, so the hazard is documented instead:
+changing **Thread** mid-turn abandons the stream and leaves `next` set on the thread the
+operator just left, and the "Resume unfinished turn" button is the affordance that recovers it.
+The same reasoning is why that button takes no gate either — it renders *after* `_stream_turn`,
+so it never exists inside the window at all, and gating it only killed it on the one run a
+failed resume produces.
+
+**The replay and the live stream can carry the same message, and appending both misleads.**
+`HumanInTheLoopMiddleware.after_model` re-emits the proposing message as its node update, and
+the model node that produced it was checkpointed a super-step earlier — so the run that
+resumes a decision draws it twice. For approve and reject that is two identical bubbles; for
+`edit` the replayed copy carries the model's arguments and the streamed copy the operator's,
+with nothing saying which executed. `_replay` gives each checkpointed message its own
+`st.empty()` keyed by message id and `_stream_turn` writes back into it, so the re-emitted
+copy wins. It self-corrects on the next rerun (`add_messages` dedupes on id) — but the run it
+is wrong on is the run that commits a booking.
+`test_a_resumed_proposal_is_replaced_rather_than_drawn_twice` guards it.
 
 The same gate is on the approval panel's "Middleware note", keyed on the action token —
 inside the fragment `rerun` reruns the fragment, and no turn is in flight to interrupt
@@ -414,6 +486,18 @@ is appended because sanitization is lossy (`a/b` and `a b` both become `a_b`).
 the dataclass from `context={}`, so a truthy default sends every unidentified caller down
 the *identified* branch into one shared bucket. `--user` defaults to nothing for the same
 reason. With no id, storage scopes to the thread.
+
+**`store.search` returns 10 rows unless you ask for more, and nothing at the call site says
+so.** `langgraph.store.base` defaults `limit=10`, so `cli._stored`'s
+`tuple(store.search(namespace))` read as "everything" and meant "ten" — silently, with no
+error and no truncation marker. It was invisible because `_stored` backs *both* front ends:
+the browser's "Stored" panel and the CLI's `/state` and `/export` under-reported by exactly
+the same amount, and the two front ends agreeing is normally this repo's proof of
+correctness. `/export` even printed the count as though it were the whole set. `_stored` now
+pages with `limit=_STORE_PAGE, offset=len(items)`; `artifacts` crosses ten first, since it
+holds deepagents' offload spill and nothing evicts it. Guarded by
+`test_stored_items_lists_past_the_stores_default_page`, which asserts the bare call still
+returns 10 so the test cannot pass by the default quietly changing.
 
 **Store keys are untrusted paths.** `cli._export` treats them as agent-chosen input and
 validates against traversal before writing to `exports/`.

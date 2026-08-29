@@ -290,11 +290,13 @@ than silently narrowing the operator's options.
 
 One operational note. `.streamlit/config.toml` binds the server to `127.0.0.1`,
 since Streamlit's default is every interface and this page has no
-authentication — "User id" names a tenant, it does not prove one. That only
-holds when the app is launched from the repo root, because Streamlit resolves
-the file from the current working directory rather than from the script's, so
-the page checks the effective `server.address` at startup and warns in the
-browser when it is not loopback. A config file cannot enforce itself. The theme
+authentication — "User id" names a tenant, it does not prove one. Under
+`streamlit run` that bind travels with the script: Streamlit appends the
+script-level config last, so the file beside `streamlit_app.py` outranks project
+and global config from any working directory. A `--server.address` flag or
+`STREAMLIT_SERVER_ADDRESS` outranks it in turn, and a config file cannot enforce
+itself, so the page checks the effective `server.address` at startup and warns in
+the browser when it is not loopback. The theme
 defines both light and dark so the mode toggle works; `primaryColor` was picked
 by measuring rather than by eye, since Streamlit puts white text on primary
 buttons and the primary button here is the one that commits money.

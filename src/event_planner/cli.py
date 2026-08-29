@@ -389,6 +389,11 @@ def _check_db_outside_workspace(db_path: Path, knob: str = "--db") -> None:
         raise UnsafeDatabaseLocation(msg)
 
 
+#: Rows per `store.search` request while paging. Large enough that a typical
+#: tenant is one round trip, small enough not to hold an unbounded page.
+_STORE_PAGE = 100
+
+
 def _stored(
     store: SqliteStore, user_id: str | None, kind: str
 ) -> tuple[tuple[SearchItem, ...], tuple[str, ...]]:
@@ -397,11 +402,26 @@ def _stored(
     Typed concretely rather than as `Any`: callers reach `item.key`, and
     `_export` treats that key as untrusted input to a filesystem write. An
     `Any` element type would let a rename upstream pass unchecked.
+
+    Paged rather than a bare `search`, because `langgraph.store.base` defaults
+    `limit` to 10 and nothing at the call site says so: the browser's "Stored"
+    panel listed at most ten of each kind, and `_export` below wrote ten files
+    while printing the count as though it were the whole set. Silent in both
+    directions — no error, no truncation marker. `artifacts` crosses ten first,
+    since it holds deepagents' offload spill and nothing evicts it.
     """
     if user_id is None:
         return (), ()
     namespace = namespace_for_user(user_id, kind)
-    return tuple(store.search(namespace)), namespace
+
+    items: list[SearchItem] = []
+    while True:
+        page = store.search(namespace, limit=_STORE_PAGE, offset=len(items))
+        items.extend(page)
+        # A short page is the last page. An exactly-full final page costs one
+        # extra empty request, which is cheaper than guessing.
+        if len(page) < _STORE_PAGE:
+            return tuple(items), namespace
 
 
 def _show_memory(store: SqliteStore, user_id: str | None) -> None:
