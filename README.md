@@ -329,10 +329,9 @@ backends.
 
 The offline suite covers the harness and cannot cover model behaviour. These
 runs were made against `claude-opus-5` and their results recorded rather than
-assumed. They predate the move to Claude Opus 5.5 for the orchestrator and
-Claude Sonnet 5.5 for the subagents, and have **not** been repeated on that
-roster yet — until they are, read them as evidence about the harness, not about
-the current models.
+assumed. The current roster — Claude Opus 5.5 orchestrating, Claude Sonnet 5.5
+subagents — has its own section, [The current roster](#the-current-roster);
+everything above it predates the move.
 
 ### One full brief, end to end
 
@@ -381,14 +380,59 @@ the base rate; no run reported a cache write.
 | `full-brief-3` — two subagents | $2.10 | $1.12 |
 | **Mean** | **$2.08** | **$1.05** |
 
-The right-hand column is an **estimate**, not a measurement: the same token
-counts repriced for the current roster. Real counts will move — `medium` effort
-on the researchers tends to mean fewer tool calls and terser output, Sonnet's
-tokenizer differs from Opus's, and Opus 5.5's thinking is governed by effort
-alone — so treat it as a planning figure until a brief is re-run live. Two
-things it does show reliably: the subagents were more than half of the old
-bill, which is why moving them to Sonnet is the larger saving; and output
-tokens, under a tenth of the volume, are more than half the cost.
+The right-hand column is an **estimate**: the same token counts repriced for
+the current roster. The one clean live brief on that roster came in at
+**$0.82** (below), so the estimate ran high — `medium` effort and Sonnet's
+tokenizer both cut the counts. Two things it showed reliably: the subagents
+were more than half of the old bill, which is why moving them to Sonnet is the
+larger saving; and output tokens, under a tenth of the volume, are more than
+half the cost.
+
+### The current roster
+
+The same 85-guest brief, re-run on Opus 5.5 (`high`) orchestrating Sonnet 5.5
+subagents. Six live runs — four briefs, two `edit` checks — ~$3.90 in all; only the
+last brief is a clean measurement, and the runs before it are each why
+something below exists.
+
+| Role | Calls | Tokens in (cached) / out | Cost |
+| --- | --- | --- | --- |
+| orchestrator — Opus 5.5 | 9 | 204,541 (180,324) / 9,835 | $0.33 |
+| budget-analyst — Sonnet 5.5 | 9 | 196,951 (159,439) / 22,086 | $0.33 |
+| venue-researcher — Sonnet 5.5 | 5 | 47,960 (33,011) / 5,206 | $0.09 |
+| vendor-researcher — Sonnet 5.5 | 3 | 21,972 (11,927) / 4,864 | $0.07 |
+| **Total** | **26** | | **$0.82**, 330s |
+
+Against `full-brief-3` on Opus 5 — $2.10 and 672s — that is about 60% cheaper
+and twice as fast, with all three subagents delegated, no `max_tokens` stop on
+any of the 26 calls, and the same substance in the answer: the date flagged as a
+Saturday, a shortlist, and a priced verdict with a worst case ($44,119, still
+under the ceiling). The researchers show the model change most plainly: $0.09
+and $0.07 here, $0.53 and $0.70 on Opus 5.
+
+What the earlier runs found:
+
+- **No delegation at all.** On the old orchestrator prompt, Opus 5.5 ran the
+  whole brief itself — zero `task` calls, every `web_search` in the context that
+  holds the booking tools. The prompt's escape hatch ("do not delegate work you
+  can finish yourself") was the cause; it now gives the reason to delegate
+  instead.
+- **A silent 4,096-token output cap.** `langchain-anthropic` 1.6.1 has no profile
+  for either 5.5 model id and falls back to 4,096. With delegation restored, the
+  budget analyst's `budget.md` ran past it and every `write_file` was cut off
+  before its `content` — 34 retries, $1.85 of a $2.50 brief, 21 minutes. The cap
+  is now set explicitly for every role.
+- **An `edit` read as a fault.** Answering a `hold_venue` with `edit` (60 -> 45
+  guests) executed 45 correctly, but the API still saw the model's own 60, so
+  Opus 5.5 reported the operator's correction as an error and advised against
+  paying the deposit. With `OperatorEditNote` it now says "the reviewer changed
+  the headcount from 60 to 45 before approving … I'm treating 45 as the confirmed
+  number" — and flags that the $12,000 total did not move with it. The resumed
+  turn carried one signed thinking block and was accepted, so an operator edit is
+  compatible with Opus 5.5's history checks.
+
+One run is a measurement, not a distribution: expect cost and wall clock to
+vary from brief to brief, and re-measure before quoting a figure to anyone.
 
 ### The approval gate
 
