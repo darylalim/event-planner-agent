@@ -343,9 +343,15 @@ the current models.
 | Wall clock | 672s |
 | Graph steps | 64 of the 200 budget |
 | Tool calls | `write_todos` ×3, `task` ×2, `estimate_budget` ×7, `write_file` ×3, `read_file` ×4, `ls` ×3 |
-| Tokens | 392,563 in (336,253 cached) / 16,943 out |
-| Cost | ~$0.87 |
+| Tokens, orchestrator | 392,563 in (336,253 cached) / 16,943 out |
+| Tokens, both subagents | 249,691 in (180,472 cached) / 31,515 out |
+| Cost | ~$2.10 — ~$0.87 orchestrator, ~$1.23 subagents |
 | Files produced | `brief.md`, `venues.md`, `vendors.md`, `budget.md` (~60 KB) |
+
+This table said **~$0.87** until it was re-measured: that figure is the
+orchestrator alone. Each `task` call checkpoints under its own namespace
+(`tools:<uuid>`), so summing the root thread's messages never sees the
+subagents' usage — more than half the total on every recorded brief.
 
 - **Skills change behaviour.** For 85 seated guests it searched
   `min_capacity=180`, applying the venue-sourcing rule that seated format uses
@@ -361,6 +367,28 @@ the current models.
   user loads that memory; a different user's session does not see it.
 - **It pushed back.** The brief said "Thursday 19 September 2026"; that date is
   a Saturday, and it flagged the mismatch and checked the real Thursday.
+
+### What a brief costs
+
+Every model call's `usage_metadata` from the three recorded full briefs, read
+per checkpoint namespace and priced at list rates. Uncached input is billed at
+the base rate; no run reported a cache write.
+
+| Run | Opus 5, every role (measured) | Opus 5.5 + Sonnet 5.5 (estimate) |
+| --- | --- | --- |
+| `full-brief-1` — three subagents | $2.37 | $1.13 |
+| `full-brief-2` — two subagents | $1.76 | $0.89 |
+| `full-brief-3` — two subagents | $2.10 | $1.12 |
+| **Mean** | **$2.08** | **$1.05** |
+
+The right-hand column is an **estimate**, not a measurement: the same token
+counts repriced for the current roster. Real counts will move — `medium` effort
+on the researchers tends to mean fewer tool calls and terser output, Sonnet's
+tokenizer differs from Opus's, and Opus 5.5's thinking is governed by effort
+alone — so treat it as a planning figure until a brief is re-run live. Two
+things it does show reliably: the subagents were more than half of the old
+bill, which is why moving them to Sonnet is the larger saving; and output
+tokens, under a tenth of the volume, are more than half the cost.
 
 ### The approval gate
 
