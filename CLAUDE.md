@@ -17,7 +17,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # uv itself is pinned: pyproject's
                                            # [tool.uv] required-version gates
                                            # every `uv` line below (not `uvx`).
-                                           # Mismatch -> `uv self update 0.12.5`
+                                           # Mismatch -> `uv self update 0.12.22`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
 uv run pytest                              # 224 tests, fully offline

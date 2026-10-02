@@ -35,8 +35,8 @@ uv itself is pinned too, by `[tool.uv] required-version` in `pyproject.toml`.
 `astral-sh/setup-uv` reads that key, so one line pins the CI runner and your
 checkout alike — and a mismatch is a hard error naming the version rather than a
 silent split between what your machine checks and what CI does. If `uv sync`
-greets you with *"Required uv version `==0.12.5` does not match the running
-version"*, that is this, working as intended — `uv self update 0.12.5` puts you
+greets you with *"Required uv version `==0.12.22` does not match the running
+version"*, that is this, working as intended — `uv self update 0.12.22` puts you
 back in step. It gates the project-aware commands only; `uvx ruff` and
 `uv self update` are deliberately untouched, the latter so the way out is never
 the thing being blocked.
