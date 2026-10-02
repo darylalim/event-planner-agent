@@ -7,9 +7,13 @@ that instructs the model to call a tool that was never bound.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from conftest import BACKTICKED, agent_bindings, bound_tool_names
-from langchain_core.messages import AIMessage
+from deepagents._models import get_model_identifier
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
@@ -17,6 +21,8 @@ from langgraph.types import Command
 from event_planner.agent import WORKSPACE, build_agent
 from event_planner.cli import DEFAULT_MAX_STEPS
 from event_planner.context import PlannerContext
+from event_planner.models import ORCHESTRATOR_MODEL, ModelChoice
+from event_planner.subagents import SUBAGENT_MODELS, SUBAGENTS
 
 THREAD = {"configurable": {"thread_id": "t-1"}}
 CTX = PlannerContext(user_id="alice@example.com")
@@ -94,6 +100,122 @@ def test_planning_tool_is_bound(scripted):
     )
     assert "write_todos" in model.bound_tools
     assert {"hold_venue", "send_invitations", "task"} <= set(model.bound_tools)
+
+
+# --------------------------------------------------------------------------- #
+# model and effort per role
+# --------------------------------------------------------------------------- #
+
+
+def _requested_effort(model: BaseChatModel) -> str | None:
+    """The `output_config.effort` this model would put on the wire.
+
+    Read off the request payload rather than off the model's own field, because
+    the payload is the contract with the API: an effort stored on the object and
+    dropped on the way out — a provider-package regression, or a model id the
+    integration does not map — would pass a check of the field and still ship
+    the API's per-model default. Building the payload is local; nothing is sent.
+    """
+    payload = cast("Any", model)._get_request_payload([HumanMessage("hi")])
+    return (payload.get("output_config") or {}).get("effort")
+
+
+@pytest.fixture
+def built(monkeypatch):
+    """`build_agent`, with what it hands `create_deep_agent` captured.
+
+    Captured at that seam because the compiled graph does not expose a
+    subagent's model, and the seam is exactly what deepagents receives.
+    """
+    captured: dict[str, Any] = {}
+
+    def _record(**kwargs: Any) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("event_planner.agent.create_deep_agent", _record)
+
+    def _build(**kwargs: Any) -> dict[str, Any]:
+        build_agent(checkpointer=InMemorySaver(), store=InMemoryStore(), **kwargs)
+        return captured
+
+    return _build
+
+
+def test_every_subagent_has_a_model_choice():
+    """A new subagent needs a deliberate model, not an inherited Opus.
+
+    `build_agent` indexes `SUBAGENT_MODELS` by name, so a missing entry would
+    fail as a bare KeyError at build time; a stale one would sit unused.
+    """
+    assert set(SUBAGENT_MODELS) == {s["name"] for s in SUBAGENTS}
+
+
+def test_the_orchestrator_requests_its_effort(built):
+    """Claude Opus 5.5 defaults to `medium`, below Claude Opus 5's `high`.
+
+    So an effort that stops reaching the request lowers how hard the agent that
+    books venues thinks, and nothing else would notice.
+    """
+    model = built()["model"]
+    assert isinstance(model, BaseChatModel)
+    assert get_model_identifier(model) == ORCHESTRATOR_MODEL.model
+    assert _requested_effort(model) == ORCHESTRATOR_MODEL.effort == "high"
+
+
+def test_each_subagent_runs_on_its_own_model_and_effort(built):
+    subagents = {spec["name"]: spec for spec in built()["subagents"]}
+    assert set(subagents) == set(SUBAGENT_MODELS)
+    for name, choice in SUBAGENT_MODELS.items():
+        model = subagents[name]["model"]
+        assert isinstance(model, BaseChatModel), name
+        assert get_model_identifier(model) == choice.model, name
+        assert _requested_effort(model) == choice.effort, name
+
+
+def test_the_orchestrator_model_does_not_reach_the_subagents(built):
+    """`--model` and the sidebar's Model field change the orchestrator only.
+
+    Without an explicit `model` in each spec, deepagents hands the subagent the
+    orchestrator's — so a regression here would quietly run every subagent on
+    whatever an operator typed.
+    """
+    captured = built(model="claude-sonnet-5-5", effort="low")
+    assert _requested_effort(captured["model"]) == "low"
+    for spec in captured["subagents"]:
+        choice = SUBAGENT_MODELS[spec["name"]]
+        assert get_model_identifier(spec["model"]) == choice.model
+        assert _requested_effort(spec["model"]) == choice.effort
+
+
+def test_building_leaves_the_shared_specs_model_free(built):
+    """The specs are module-level, so a build that wrote into them would leak
+    one build's chat model into every later one — including a test's fake."""
+    built()
+    assert all("model" not in spec for spec in SUBAGENTS)
+
+
+def test_a_preconfigured_model_is_used_as_given(built, scripted):
+    """`effort` applies to an id; a chat model carries its own. That is what
+    lets every other test here hand in a scripted fake."""
+    fake = scripted()
+    assert built(model=fake)["model"] is fake
+
+
+def test_no_effort_passes_the_id_through_untouched():
+    """`effort=None` is the escape hatch for a model that rejects the parameter.
+
+    It must send nothing — not an empty `output_config` — so the id is left for
+    deepagents to resolve exactly as it did before effort existed here.
+    """
+    assert ModelChoice("claude-haiku-4-5", None).build() == "claude-haiku-4-5"
+
+
+def test_a_provider_prefixed_id_still_resolves():
+    model = ModelChoice("anthropic:claude-opus-5-5", "medium").build()
+    assert isinstance(model, BaseChatModel)
+    assert get_model_identifier(model) == "claude-opus-5-5"
+    assert _requested_effort(model) == "medium"
 
 
 # --------------------------------------------------------------------------- #

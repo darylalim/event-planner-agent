@@ -8,12 +8,19 @@ that also appear in the orchestrator's `skills`.
 The point of delegating here is context isolation: comparing eight venues
 burns a lot of tokens on listings the orchestrator never needs to see again.
 The subagent does that work in its own context and reports back a shortlist.
+
+That isolation is also what makes a cheaper model safe here. Each `task` call
+starts the subagent on a fresh conversation that is discarded once it reports,
+so its model never shares a transcript with the orchestrator's — no thinking
+block crosses between models, and nothing the orchestrator has checkpointed
+depends on which model a subagent ran.
 """
 
 from __future__ import annotations
 
 from deepagents import SubAgent
 
+from event_planner.models import ModelChoice
 from event_planner.prompts import (
     BUDGET_ANALYST_PROMPT,
     VENDOR_RESEARCHER_PROMPT,
@@ -63,3 +70,26 @@ BUDGET_ANALYST: SubAgent = {
 }
 
 SUBAGENTS: list[SubAgent] = [VENUE_RESEARCHER, VENDOR_RESEARCHER, BUDGET_ANALYST]
+
+#: Model and effort per subagent, keyed by name. Applied by `build_agent`
+#: rather than written into the specs above, so importing this module builds no
+#: chat model. `test_every_subagent_has_a_model_choice` holds the keys to
+#: `SUBAGENTS`: a new subagent missing here would otherwise fail at build time
+#: with a bare KeyError, and one silently inheriting the orchestrator's Opus is
+#: the outcome this table exists to make a decision rather than a default.
+#:
+#: Sonnet throughout: all three read material and weigh it, and the two
+#: researchers read live `web_search` results, where the stronger model is the
+#: better defence against instructions planted in a page.
+#:
+#: * The researchers run at `medium`, Anthropic's starting point for multi-step
+#:   tool use on Sonnet 5.5 (its levels were recalibrated from Sonnet 5, so
+#:   intuitions about the old ones do not carry over).
+#: * The budget analyst runs at `high`. It makes one tool call and writes a short
+#:   answer, so the extra effort costs little — and that answer is what the
+#:   orchestrator weighs before proposing a booking.
+SUBAGENT_MODELS: dict[str, ModelChoice] = {
+    "venue-researcher": ModelChoice("claude-sonnet-5-5", "medium"),
+    "vendor-researcher": ModelChoice("claude-sonnet-5-5", "medium"),
+    "budget-analyst": ModelChoice("claude-sonnet-5-5", "high"),
+}

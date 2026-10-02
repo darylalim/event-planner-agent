@@ -23,8 +23,9 @@ from langgraph.store.base import SearchItem
 from langgraph.store.sqlite import SqliteStore
 from langgraph.types import Command
 
-from event_planner.agent import DEFAULT_MODEL, WORKSPACE, build_agent
+from event_planner.agent import DEFAULT_EFFORT, DEFAULT_MODEL, WORKSPACE, build_agent
 from event_planner.context import PlannerContext, namespace_for_user, safe_component
+from event_planner.models import EFFORT_LEVELS, Effort
 
 #: The checkout this was run from. It lives here rather than in `agent.py`
 #: because everything below it — `.state/`, `.env`, `exports/` — is an operator
@@ -85,7 +86,7 @@ DEFAULT_MAX_STEPS = 200
 
 BANNER = """\
 Event Planner  (Deep Agents)
-  thread: {thread}   user: {user}   model: {model}
+  thread: {thread}   user: {user}   model: {model} ({effort} effort)
   Type your event brief.
   /state   what is stored for this user     /export  write event files to disk
   /exit    quit
@@ -500,6 +501,22 @@ def _export(store: SqliteStore, user_id: str | None, destination: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+#: The `--effort` value that sends no effort at all. A word rather than an empty
+#: string, because `--effort ''` reads like a typo and is easy to pass by accident.
+NO_EFFORT = "none"
+
+
+def _effort_arg(raw: str) -> Effort | None:
+    """Parse `--effort`: one of the API's levels, or `none` to send nothing."""
+    if raw == NO_EFFORT:
+        return None
+    for level in EFFORT_LEVELS:
+        if raw == level:
+            return level
+    msg = f"invalid effort {raw!r}; choose from {', '.join((*EFFORT_LEVELS, NO_EFFORT))}"
+    raise argparse.ArgumentTypeError(msg)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="event-planner", description=__doc__)
     parser.add_argument("--thread", default="default", help="Conversation thread id.")
@@ -513,7 +530,22 @@ def main() -> int:
             "unidentified operator into one bucket."
         ),
     )
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Model id.")
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help="The orchestrator's model id. Subagents keep their own (subagents.py).",
+    )
+    parser.add_argument(
+        "--effort",
+        type=_effort_arg,
+        default=DEFAULT_EFFORT,
+        metavar="{" + ",".join((*EFFORT_LEVELS, NO_EFFORT)) + "}",
+        help=(
+            f"The orchestrator's effort (default: {DEFAULT_EFFORT}). '{NO_EFFORT}' "
+            "sends none, for a model that rejects the parameter, such as "
+            "claude-haiku-4-5."
+        ),
+    )
     parser.add_argument(
         "--db",
         default=str(STATE_DIR / "planner.sqlite"),
@@ -553,7 +585,12 @@ def main() -> int:
     ):
         store.setup()
         try:
-            graph = build_agent(model=args.model, checkpointer=checkpointer, store=store)
+            graph = build_agent(
+                model=args.model,
+                effort=args.effort,
+                checkpointer=checkpointer,
+                store=store,
+            )
         except FileNotFoundError as exc:
             # A wheel that dropped its skills is a packaging fault, and it should
             # read like the other startup refusals rather than as a traceback.
@@ -570,6 +607,7 @@ def main() -> int:
                 thread=args.thread,
                 user=args.user or "(none — storage scoped to this thread)",
                 model=args.model,
+                effort=args.effort or "model-default",
             )
         )
 

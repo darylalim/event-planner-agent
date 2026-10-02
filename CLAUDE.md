@@ -20,7 +20,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.12.22`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 224 tests, fully offline
+uv run pytest                              # 250 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -132,9 +132,10 @@ adding suppressions.
 
 ```
 build_agent()                     agent.py — the only place the harness is assembled
-├── model            claude-opus-5
+├── model            claude-opus-5-5 @ effort high   — ORCHESTRATOR_MODEL in models.py
 ├── tools            ORCHESTRATOR_TOOLS (7)
-├── subagents        SUBAGENTS from subagents.py (3, each with its own narrow tool set)
+├── subagents        SUBAGENTS from subagents.py (3, each with its own narrow tool set,
+│                    and its own model + effort from SUBAGENT_MODELS)
 ├── middleware       TodoListMiddleware()      — must be explicit, see gotchas
 ├── backend          build_backend() → CompositeBackend
 ├── skills           ["/skills/"]              — opened on demand
@@ -242,6 +243,18 @@ through `StoreBackend`. Every real call site passes one (`cli.py`, `streamlit_ap
 repro script, or test must too — nothing in that traceback names `build_agent` or its `store=`
 parameter. The guard belongs beside the checkpointer's in `build_agent`; until it is written,
 this bullet is what stands in for it.
+
+**Every role names its model and effort; nothing inherits, and effort is never left unset.**
+`build_agent` gives each subagent `SUBAGENT_MODELS[name].build()` at build time. A spec with
+no `model` silently runs on the orchestrator's — so `--model` and the sidebar's Model field
+would reach every subagent — and a spec *carrying* a chat model would construct one on import.
+Effort is explicit because its API default is per model and moves: Claude Opus 5.5 defaults to
+`medium`, a level below Claude Opus 5's `high`. `test_the_orchestrator_requests_its_effort` and
+its neighbours read effort off the **request payload**, not the model's field, so an effort
+stored and then dropped on the way out still reds. `effort=None` (`--effort none`, the
+sidebar's "none") sends nothing, for models that reject the parameter, such as Haiku 4.5; the
+page parses its picker with `cli._effort_arg` rather than offering a `None` option, because a
+selectbox already reads `None` as "nothing selected" and that choice never reached the build.
 
 **Approval-gated tools come from one list.** `IRREVERSIBLE_TOOLS` in `tools/__init__.py`
 is the source; `INTERRUPT_ON` is derived from it. A new money-spending or guest-contacting
@@ -369,7 +382,7 @@ the chat box. Guarded by `test_a_collapsed_tool_result_is_not_sent_to_the_browse
 the tool panels it was written for.** `RerunException` subclasses `BaseException`, so the
 turn's `except Exception` misses it and `graph.stream` is abandoned with nothing shown — on a
 turn that ran 672s live. `submit_mode="disable"` and `gated=not turn_pending` were the first
-two answers; the sidebar's three text inputs and the stored-file downloads were both still
+two answers; the sidebar's fields (three text inputs and the Effort picker) and the stored-file downloads were both still
 live in that window. The downloads now take `on_click="ignore"`, which is the clean fix: it
 removes the rerun at the source rather than the click, so nothing has to be lifted afterwards
 and a download needs no server-side rerun anyway (the bytes come over a separate media URL).

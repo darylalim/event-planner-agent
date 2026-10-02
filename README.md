@@ -63,6 +63,7 @@ uv run event-planner                                  # interactive CLI
 uv run event-planner --user alice@example.com         # scoped memory
 uv run event-planner --thread offsite-2026            # named conversation
 uv run event-planner --max-steps 400                  # longer planning session
+uv run event-planner --model claude-opus-5 --effort xhigh   # orchestrator only
 uv run streamlit run streamlit_app.py                 # browser UI
 uv run --with "langgraph-cli[inmem]" langgraph dev    # LangGraph Studio
 uv run pytest                                         # harness tests
@@ -117,15 +118,24 @@ for good; the workflow's `workflow_dispatch` trigger is the recovery path.
 ## Architecture
 
 ```
-orchestrator (claude-opus-5)
+orchestrator (claude-opus-5-5, high effort)
 ├── tools      search_venues · check_availability · search_vendors
 │               estimate_budget · web_search · hold_venue* · send_invitations*
-├── subagents  venue-researcher · vendor-researcher · budget-analyst
+├── subagents  venue-researcher · vendor-researcher   (claude-sonnet-5-5, medium)
+│               budget-analyst                        (claude-sonnet-5-5, high)
 ├── skills     venue-sourcing · budget-modeling        (loaded on demand)
 └── memory     /memories/AGENTS.md                     (loaded every turn)
 
                                         * gated behind human approval
 ```
+
+Each role's model and effort is chosen, not inherited: the orchestrator's lives
+in `models.py`, the subagents' in `SUBAGENT_MODELS` beside their specs. Effort is
+always sent explicitly, because the API's default is per model and moves —
+Claude Opus 5.5 defaults to `medium`, below the `high` Claude Opus 5 used. The
+subagents run on Sonnet because each `task` call starts them on a fresh
+conversation that is thrown away once they report, so a second model never
+shares a transcript with the orchestrator's.
 
 ### Storage
 
@@ -319,7 +329,10 @@ backends.
 
 The offline suite covers the harness and cannot cover model behaviour. These
 runs were made against `claude-opus-5` and their results recorded rather than
-assumed.
+assumed. They predate the move to Claude Opus 5.5 for the orchestrator and
+Claude Sonnet 5.5 for the subagents, and have **not** been repeated on that
+roster yet — until they are, read them as evidence about the harness, not about
+the current models.
 
 ### One full brief, end to end
 
@@ -475,7 +488,8 @@ All were found by inspecting the package, and all are covered by tests:
 streamlit_app.py  the browser front end — the page, and nothing else of consequence
 src/event_planner/
   agent.py        harness wiring — backend, memory, skills, approval gates
-  subagents.py    the three researcher subagents
+  models.py       the orchestrator's model and effort, and the ModelChoice type
+  subagents.py    the three researcher subagents, and the model each runs on
   prompts.py      orchestrator + subagent system prompts
   context.py      per-user memory namespacing
   cli.py          interactive REPL with approval prompts

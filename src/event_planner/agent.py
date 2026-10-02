@@ -58,8 +58,9 @@ from event_planner.context import (
     events_namespace,
     memory_namespace,
 )
+from event_planner.models import ORCHESTRATOR_MODEL, Effort, ModelChoice
 from event_planner.prompts import ORCHESTRATOR_PROMPT
-from event_planner.subagents import SUBAGENTS
+from event_planner.subagents import SUBAGENT_MODELS, SUBAGENTS
 from event_planner.tools import (
     IRREVERSIBLE_TOOLS,
     check_availability,
@@ -71,7 +72,12 @@ from event_planner.tools import (
     web_search,
 )
 
-DEFAULT_MODEL = "claude-opus-5"
+#: The orchestrator's model and effort. Both front ends offer these as the
+#: defaults for their model and effort fields; neither field reaches the
+#: subagents, which run on `SUBAGENT_MODELS`. See `models.py` for why effort
+#: is never left to the API's per-model default.
+DEFAULT_MODEL = ORCHESTRATOR_MODEL.model
+DEFAULT_EFFORT = ORCHESTRATOR_MODEL.effort
 
 #: Everything the agent can see on disk, and the only path here derived from
 #: `__file__`. It sits INSIDE the package on purpose: a wheel carries
@@ -235,6 +241,7 @@ def build_backend() -> CompositeBackend:
 def build_agent(
     *,
     model: str | Any = DEFAULT_MODEL,
+    effort: Effort | None = DEFAULT_EFFORT,
     checkpointer: Any | None = None,
     store: BaseStore | None = None,
     hosted: bool = False,
@@ -242,7 +249,13 @@ def build_agent(
     """Construct the event planning agent.
 
     Args:
-        model: Model id or a preconfigured chat model.
+        model: The orchestrator's model id, or a preconfigured chat model.
+            Subagents do not follow it; each runs on its own entry in
+            `SUBAGENT_MODELS`.
+        effort: The orchestrator's effort, applied when `model` is an id.
+            `None` sends none, for models that reject the parameter. A
+            preconfigured chat model carries its own and this is ignored —
+            which is what lets the tests hand in a scripted fake.
         checkpointer: Required for human-in-the-loop approval and for
             conversation state to survive across `invoke` calls.
         store: Backing store for `/memories/`. Without one, memory does not
@@ -265,11 +278,23 @@ def build_agent(
         )
         raise ValueError(msg)
 
+    if isinstance(model, str):
+        model = ModelChoice(model, effort).build()
+
+    # Each subagent is given its model here, at build time, rather than in its
+    # spec: a spec carrying a chat model would construct one on import. A
+    # copy, so the module-level specs stay model-free for the next build.
+    subagents = []
+    for spec in SUBAGENTS:
+        configured = spec.copy()
+        configured["model"] = SUBAGENT_MODELS[spec["name"]].build()
+        subagents.append(configured)
+
     return create_deep_agent(
         model=model,
         tools=ORCHESTRATOR_TOOLS,
         system_prompt=ORCHESTRATOR_PROMPT,
-        subagents=SUBAGENTS,
+        subagents=subagents,
         # Not included by create_deep_agent in 0.7.9 — see module docstring.
         # Cast: TodoListMiddleware is generic over context, and the checker
         # treats that parameter as invariant against our PlannerContext.

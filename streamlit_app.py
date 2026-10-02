@@ -52,9 +52,10 @@ from typing import Any
 import streamlit as st
 from langgraph.types import Command
 
-from event_planner.agent import DEFAULT_MODEL, build_agent
-from event_planner.cli import PROJECT_ROOT, STATE_DIR, _load_env
+from event_planner.agent import DEFAULT_EFFORT, DEFAULT_MODEL, build_agent
+from event_planner.cli import NO_EFFORT, PROJECT_ROOT, STATE_DIR, _effort_arg, _load_env
 from event_planner.context import PlannerContext
+from event_planner.models import EFFORT_LEVELS, Effort
 from event_planner.webui import (
     DEFAULT_MAX_STEPS,
     SUPPORTED_DECISIONS,
@@ -168,13 +169,14 @@ def _release_resources(value: tuple[Any, Any, Any]) -> None:
     scope="session",
     on_release=_release_resources,
 )
-def _resources(db: str, model: str) -> tuple[Any, Any, Any]:
+def _resources(db: str, model: str, effort: Effort | None) -> tuple[Any, Any, Any]:
     """Build the graph once and share it across this session's reruns.
 
-    Cached on `(db, model)`: the checkpointer and store are per-database, and the
-    graph binds the model at construction. Everything that varies per operator —
-    thread id, user id — is passed per call as config and context instead, so it
-    must not be part of this key.
+    Cached on `(db, model, effort)`: the checkpointer and store are per-database,
+    and the graph binds the model *and its effort* at construction — so effort
+    left out of the key would serve the first level picked for every later one.
+    Everything that varies per operator — thread id, user id — is passed per call
+    as config and context instead, so it must not be part of this key.
 
     The checkpointer is returned as well even though the page never touches it:
     `_release_resources` needs its connection, and reaching into `graph` for it
@@ -186,7 +188,7 @@ def _resources(db: str, model: str) -> tuple[Any, Any, Any]:
     # The common case is an unparseable model id — exactly what the handler at
     # the call site tells the operator to correct, and then retype.
     try:
-        graph = build_agent(model=model, checkpointer=checkpointer, store=store)
+        graph = build_agent(model=model, effort=effort, checkpointer=checkpointer, store=store)
     except BaseException:
         close_persistence(checkpointer, store)
         raise
@@ -691,7 +693,7 @@ with st.sidebar:
     # a decision boundary rather than a section.
     st.subheader("Session")
 
-    # These three are deliberately NOT gated on `turn_pending`, and the reason is
+    # These four are deliberately NOT gated on `turn_pending`, and the reason is
     # worth recording because the gate looks obviously right. Editing one
     # mid-turn does queue a rerun that abandons the stream, and changing
     # **Thread** is worse than a lost turn: the abandoned thread keeps `next`
@@ -728,7 +730,28 @@ with st.sidebar:
             "is not authenticated: it names a tenant, it does not prove one."
         ),
     )
-    model = st.text_input("Model", value=DEFAULT_MODEL, key="model")
+    model = st.text_input(
+        "Model",
+        value=DEFAULT_MODEL,
+        key="model",
+        help="The orchestrator's model. Subagents keep their own (subagents.py).",
+    )
+    # A fixed set of options, unlike Model above, so it adds at most a handful
+    # of cache keys. The last sends no effort, for a model that rejects the
+    # parameter. It is the CLI's word, parsed by the CLI's own `_effort_arg`, and
+    # deliberately not a `None` option: a selectbox already uses `None` to mean
+    # "nothing selected", and measured under AppTest, picking it never reached
+    # the build at all.
+    effort = _effort_arg(
+        st.selectbox(
+            "Effort",
+            options=(*EFFORT_LEVELS, NO_EFFORT),
+            index=(*EFFORT_LEVELS, NO_EFFORT).index(DEFAULT_EFFORT or NO_EFFORT),
+            format_func=lambda level: f"{level} (model default)" if level == NO_EFFORT else level,
+            key="effort",
+            help="How hard the orchestrator thinks before answering or calling a tool.",
+        )
+    )
 
     # Blank must mean *absent*, never a placeholder string. This is the same
     # invariant as `PlannerContext.user_id` defaulting to None: a truthy fallback
@@ -790,7 +813,7 @@ if st.get_option("server.address") not in ("127.0.0.1", "localhost", "::1"):
 db_path = os.environ.get("EVENT_PLANNER_DB", "").strip() or str(STATE_DIR / "planner.sqlite")
 
 try:
-    graph, store, _checkpointer = _resources(db_path, model)
+    graph, store, _checkpointer = _resources(db_path, model, effort)
 except UnsafeDatabaseLocation as exc:
     # Named specifically: building the agent raises `ValueError` for other
     # reasons too — an unparseable model id among them — and reporting a model

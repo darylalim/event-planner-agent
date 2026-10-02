@@ -196,6 +196,38 @@ def test_a_typed_brief_reaches_the_graph(page):
     ]
 
 
+def test_the_effort_picker_reaches_the_build(page, monkeypatch):
+    """The picker defaults to the orchestrator's effort and a change rebuilds.
+
+    Effort is bound at construction and the graph is cached, so the risk is a
+    cache key that omits it: the page would keep serving the first level picked
+    while the sidebar showed another. And "none" must arrive as `None`, exactly
+    as the CLI's `--effort none` does — as a string, the API would receive it as
+    a level and reject the request.
+    """
+    from event_planner.agent import DEFAULT_EFFORT, DEFAULT_MODEL
+    from event_planner.cli import NO_EFFORT
+
+    at, fake = page()
+    assert at.selectbox(key="effort").value == DEFAULT_EFFORT
+
+    builds: list[dict[str, object]] = []
+
+    def _record(**kwargs):
+        builds.append(kwargs)
+        return fake
+
+    monkeypatch.setattr("event_planner.agent.build_agent", _record)
+    at.selectbox(key="effort").set_value("medium").run()
+    at.selectbox(key="effort").set_value(NO_EFFORT).run()
+
+    assert not at.exception
+    assert [(b["model"], b["effort"]) for b in builds] == [
+        (DEFAULT_MODEL, "medium"),
+        (DEFAULT_MODEL, None),
+    ]
+
+
 def test_a_submitted_brief_streams_its_turn_in_the_same_run(page):
     """The submit and the turn are one run, not two.
 

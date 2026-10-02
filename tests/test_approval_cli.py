@@ -8,16 +8,20 @@ actually tried to say no.
 
 from __future__ import annotations
 
+import argparse
 from typing import Any
 
 import pytest
 
 from event_planner.cli import (
+    NO_EFFORT,
     _collect_decisions,
+    _effort_arg,
     _prompt_one,
     _resolve_choice,
     _unique_prefix,
 )
+from event_planner.models import EFFORT_LEVELS
 
 ACTION = {
     "name": "hold_venue",
@@ -238,3 +242,30 @@ def test_missing_review_config_falls_back_to_safe_decisions(answers):
         {"action_requests": [{"name": "hold_venue", "args": {}}], "review_configs": []}
     )
     assert _collect_decisions([payload]) == [{"type": "approve"}]
+
+
+# --------------------------------------------------------------------------- #
+# --effort
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("level", EFFORT_LEVELS)
+def test_every_api_effort_level_parses_to_itself(level):
+    assert _effort_arg(level) == level
+
+
+def test_none_sends_no_effort():
+    """The escape hatch for a model that rejects the parameter (Haiku 4.5).
+
+    It must come back as `None`, not the string: `build_agent` treats any string
+    as a level to send, so a literal "none" would reach the API as one.
+    """
+    assert _effort_arg(NO_EFFORT) is None
+
+
+@pytest.mark.parametrize("raw", ["", "High", "extreme", "default"])
+def test_an_unknown_effort_is_refused_rather_than_sent(raw):
+    """argparse turns this into a usage error before any graph is built — the
+    alternative is a 400 from the API on the operator's first message."""
+    with pytest.raises(argparse.ArgumentTypeError, match="choose from"):
+        _effort_arg(raw)
