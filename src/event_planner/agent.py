@@ -58,6 +58,7 @@ from event_planner.context import (
     events_namespace,
     memory_namespace,
 )
+from event_planner.middleware import OperatorEditNote
 from event_planner.models import ORCHESTRATOR_MODEL, Effort, ModelChoice
 from event_planner.prompts import ORCHESTRATOR_PROMPT
 from event_planner.subagents import SUBAGENT_MODELS, SUBAGENTS
@@ -295,10 +296,13 @@ def build_agent(
         tools=ORCHESTRATOR_TOOLS,
         system_prompt=ORCHESTRATOR_PROMPT,
         subagents=subagents,
-        # Not included by create_deep_agent in 0.7.9 — see module docstring.
-        # Cast: TodoListMiddleware is generic over context, and the checker
-        # treats that parameter as invariant against our PlannerContext.
-        middleware=cast("Any", (TodoListMiddleware(),)),
+        # TodoListMiddleware: not included by create_deep_agent in 0.7.9 — see
+        # module docstring. OperatorEditNote: an `edit` decision otherwise
+        # reaches the tool but not the model — see middleware.py. A wrap hook,
+        # not a node, so it leaves the 6 + 4N step budget alone.
+        # Cast: both are generic over context, and the checker treats that
+        # parameter as invariant against our PlannerContext.
+        middleware=cast("Any", (TodoListMiddleware(), OperatorEditNote())),
         backend=build_backend(),
         skills=["/skills/"],
         # Loaded into the system prompt every turn, unlike skills which the

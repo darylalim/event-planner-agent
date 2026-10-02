@@ -335,6 +335,72 @@ def test_edit_rewrites_the_arguments_before_execution(scripted):
     assert "Headcount:   45" in tool_msg.content
 
 
+def _anthropic_hold_call() -> AIMessage:
+    """`_hold_call` shaped the way `langchain-anthropic` really returns it.
+
+    The call lives twice: parsed into `tool_calls`, and as a `tool_use` block in
+    `content` — the copy that is serialised back to the API. `_hold_call`'s
+    plain-string content has no second copy, which is why no offline test saw
+    an `edit` reach the tool and not the model.
+    """
+    call = _hold_call().tool_calls[0]
+    return AIMessage(
+        content=[
+            {"type": "text", "text": "Placing the hold."},
+            {"type": "tool_use", "id": call["id"], "name": call["name"], "input": call["args"]},
+        ],
+        tool_calls=[call],
+    )
+
+
+def _resume(graph, decision):
+    return graph.invoke(Command(resume={"decisions": [decision]}), config=THREAD, context=CTX)
+
+
+def test_an_edit_is_announced_to_the_model(scripted):
+    """Measured live on Claude Opus 5.5 before this existed: the operator's
+    60 -> 45 came back as "45 guests instead of the 60 you asked for — don't
+    pay the deposit", because the API still saw the model's own 60."""
+    graph = _agent(scripted(_anthropic_hold_call(), AIMessage(content="Held.")))
+    graph.invoke({"messages": [{"role": "user", "content": "Book it."}]}, THREAD, context=CTX)
+    corrected = dict(_hold_call().tool_calls[0]["args"], headcount=45)
+    messages = _resume(
+        graph, {"type": "edit", "edited_action": {"name": "hold_venue", "args": corrected}}
+    )["messages"]
+
+    tool_msg = next(m for m in messages if getattr(m, "name", None) == "hold_venue")
+    assert "Headcount:   45" in tool_msg.content
+    assert "[Operator edit] The human reviewer changed this `hold_venue` call" in tool_msg.content
+    assert 'You proposed {"headcount": 60}; what executed was {"headcount": 45}' in tool_msg.content
+
+    # Announced, not repaired: the proposal's tool_use block is history, and
+    # Claude Opus 5.5 checks thinking blocks against an edited earlier turn.
+    proposal = next(m for m in messages if isinstance(m, AIMessage) and m.tool_calls)
+    block = next(b for b in proposal.content if isinstance(b, dict) and b["type"] == "tool_use")
+    assert block["input"]["headcount"] == 60
+
+
+def test_an_approved_call_carries_no_edit_note(scripted):
+    graph = _agent(scripted(_anthropic_hold_call(), AIMessage(content="Held.")))
+    graph.invoke({"messages": [{"role": "user", "content": "Book it."}]}, THREAD, context=CTX)
+    messages = _resume(graph, {"type": "approve"})["messages"]
+    tool_msg = next(m for m in messages if getattr(m, "name", None) == "hold_venue")
+    assert "Operator edit" not in tool_msg.content
+
+
+def test_an_edit_note_needs_a_proposal_it_can_see(scripted):
+    """With no `tool_use` block to compare against, nothing is claimed — the
+    note must never assert a proposal this middleware did not read."""
+    graph = _agent(scripted(_hold_call(), AIMessage(content="Held.")))
+    graph.invoke({"messages": [{"role": "user", "content": "Book it."}]}, THREAD, context=CTX)
+    corrected = dict(_hold_call().tool_calls[0]["args"], headcount=45)
+    messages = _resume(
+        graph, {"type": "edit", "edited_action": {"name": "hold_venue", "args": corrected}}
+    )["messages"]
+    tool_msg = next(m for m in messages if getattr(m, "name", None) == "hold_venue")
+    assert "Operator edit" not in tool_msg.content
+
+
 def test_unlisted_tools_are_not_gated(scripted):
     """Read-only research must not stop for approval, or the agent is unusable."""
     call = AIMessage(

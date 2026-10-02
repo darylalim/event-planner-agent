@@ -20,7 +20,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.12.22`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 251 tests, fully offline
+uv run pytest                              # 254 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -137,6 +137,7 @@ build_agent()                     agent.py — the only place the harness is ass
 ├── subagents        SUBAGENTS from subagents.py (3, each with its own narrow tool set,
 │                    and its own model + effort from SUBAGENT_MODELS)
 ├── middleware       TodoListMiddleware()      — must be explicit, see gotchas
+│                    OperatorEditNote()        — tells the model an `edit` changed what ran
 ├── backend          build_backend() → CompositeBackend
 ├── skills           ["/skills/"]              — opened on demand
 ├── memory           ["/memories/AGENTS.md"]   — injected into system prompt every turn
@@ -265,6 +266,18 @@ the budget analyst's `budget.md` ran past it, every `write_file` was cut off bef
 `content`, and it retried 34 times ($1.85 of a $2.50 brief). `test_every_role_gets_the_explicit_output_cap`
 reads it off the payload. The next model id newer than the package walks into the same trap
 wherever a model is built without going through `ModelChoice`.
+
+**An `edit` decision reaches the tool, not the model, unless `OperatorEditNote` says so.**
+`HumanInTheLoopMiddleware` rewrites the proposal's `tool_calls` but leaves the `tool_use` block
+in `content`, and that block is what `langchain-anthropic` serialises — so the API is told the
+model asked for its own arguments and then shows it a result for the operator's. Live on Opus
+5.5, a 60 -> 45 headcount edit was reported back as a fault ("don't pay the deposit"). The
+middleware appends a note to the new `ToolMessage` instead of repairing the proposal: Opus 5.5
+checks thinking blocks against edited earlier turns, so the history must stay append-only.
+It is a wrap hook, not a node, so the `6 + 4N` budget is unchanged. The offline fakes put the
+call in `tool_calls` only, which is why no test saw this; `_anthropic_hold_call` in
+`test_harness.py` is the Anthropic-shaped fixture, and `test_an_edit_is_announced_to_the_model`
+the guard.
 
 **Approval-gated tools come from one list.** `IRREVERSIBLE_TOOLS` in `tools/__init__.py`
 is the source; `INTERRUPT_ON` is derived from it. A new money-spending or guest-contacting
