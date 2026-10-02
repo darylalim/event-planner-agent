@@ -21,7 +21,7 @@ from langgraph.types import Command
 from event_planner.agent import WORKSPACE, build_agent
 from event_planner.cli import DEFAULT_MAX_STEPS
 from event_planner.context import PlannerContext
-from event_planner.models import ORCHESTRATOR_MODEL, ModelChoice
+from event_planner.models import MAX_OUTPUT_TOKENS, ORCHESTRATOR_MODEL, ModelChoice
 from event_planner.subagents import SUBAGENT_MODELS, SUBAGENTS
 
 THREAD = {"configurable": {"thread_id": "t-1"}}
@@ -116,8 +116,15 @@ def _requested_effort(model: BaseChatModel) -> str | None:
     integration does not map — would pass a check of the field and still ship
     the API's per-model default. Building the payload is local; nothing is sent.
     """
-    payload = cast("Any", model)._get_request_payload([HumanMessage("hi")])
-    return (payload.get("output_config") or {}).get("effort")
+    return (_payload(model).get("output_config") or {}).get("effort")
+
+
+def _requested_max_tokens(model: BaseChatModel) -> int | None:
+    return _payload(model).get("max_tokens")
+
+
+def _payload(model: BaseChatModel) -> dict[str, Any]:
+    return cast("Any", model)._get_request_payload([HumanMessage("hi")])
 
 
 @pytest.fixture
@@ -202,13 +209,30 @@ def test_a_preconfigured_model_is_used_as_given(built, scripted):
     assert built(model=fake)["model"] is fake
 
 
-def test_no_effort_passes_the_id_through_untouched():
+def test_no_effort_sends_none_but_keeps_the_output_cap():
     """`effort=None` is the escape hatch for a model that rejects the parameter.
 
-    It must send nothing — not an empty `output_config` — so the id is left for
-    deepagents to resolve exactly as it did before effort existed here.
+    It must send no effort — not an empty `output_config` — and it must still be
+    built here: the first version handed deepagents the bare id, which resolves
+    with the package's profile default and would reopen the 4,096 trap.
     """
-    assert ModelChoice("claude-haiku-4-5", None).build() == "claude-haiku-4-5"
+    model = ModelChoice("claude-haiku-4-5", None).build()
+    assert _requested_effort(model) is None
+    assert _requested_max_tokens(model) == MAX_OUTPUT_TOKENS
+
+
+def test_every_role_gets_the_explicit_output_cap(built):
+    """Measured live: `langchain-anthropic` 1.6.1 has no profile for
+    `claude-opus-5-5` or `claude-sonnet-5-5` and falls back to 4,096 output
+    tokens. The budget analyst's `budget.md` ran past that, every `write_file`
+    was cut off before its `content`, and it retried 34 times — $1.85 of a
+    $2.50 brief. Read off the payload, like effort, because that is what the
+    API enforces."""
+    captured = built()
+    models = [captured["model"], *(spec["model"] for spec in captured["subagents"])]
+    assert [_requested_max_tokens(m) for m in models] == [MAX_OUTPUT_TOKENS] * 4
+    # An operator's --model goes through the same door.
+    assert _requested_max_tokens(built(model="claude-opus-5-5")["model"]) == MAX_OUTPUT_TOKENS
 
 
 def test_a_provider_prefixed_id_still_resolves():

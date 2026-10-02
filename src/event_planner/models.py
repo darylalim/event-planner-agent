@@ -18,7 +18,7 @@ beside the roles themselves without importing the module that imports it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, get_args
+from typing import Any, Literal, get_args
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
@@ -27,6 +27,17 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
 #: In ascending order, so a picker can list them as a scale.
 EFFORT_LEVELS: tuple[Effort, ...] = get_args(Effort)
+
+#: The output cap for every model built here, set explicitly for the same reason
+#: as effort. `langchain-anthropic` derives its default `max_tokens` from a table
+#: of model profiles, and an id newer than the installed package is not in it:
+#: 1.6.1 knows `claude-opus-5` (128,000) but not `claude-opus-5-5` or
+#: `claude-sonnet-5-5`, which fall back to 4,096 with no warning. Measured live:
+#: the budget analyst's `budget.md` ran past 4,096 tokens, every `write_file` was
+#: cut off before its `content` argument, and it retried 34 times — $1.85 of a
+#: $2.50 brief. 64,000 is within every current model's output limit, Haiku 4.5's
+#: included, and leaves a long file far from the edge.
+MAX_OUTPUT_TOKENS = 64_000
 
 
 @dataclass(frozen=True)
@@ -41,17 +52,18 @@ class ModelChoice:
     model: str
     effort: Effort | None
 
-    def build(self) -> str | BaseChatModel:
-        """Resolve to what `create_deep_agent` accepts as a model.
+    def build(self) -> BaseChatModel:
+        """Resolve to a chat model with this choice's effort and the output cap.
 
-        With no effort the id is passed through untouched, and deepagents
-        resolves it exactly as it did before effort existed here. With one, it
-        goes through `init_chat_model` — not `ChatAnthropic` directly — so a
-        provider-prefixed id like `anthropic:claude-opus-5-5` still parses.
+        Always built here, never handed to deepagents as a bare id: a bare id is
+        resolved with the package's profile default, which is the 4,096 trap
+        above. Through `init_chat_model` rather than `ChatAnthropic` directly, so
+        a provider-prefixed id like `anthropic:claude-opus-5-5` still parses.
         """
-        if self.effort is None:
-            return self.model
-        return init_chat_model(self.model, effort=self.effort)
+        kwargs: dict[str, Any] = {"max_tokens": MAX_OUTPUT_TOKENS}
+        if self.effort is not None:
+            kwargs["effort"] = self.effort
+        return init_chat_model(self.model, **kwargs)
 
 
 #: The orchestrator plans, delegates, and is the only role that calls the two

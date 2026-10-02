@@ -20,7 +20,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.12.22`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 250 tests, fully offline
+uv run pytest                              # 251 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -255,6 +255,16 @@ stored and then dropped on the way out still reds. `effort=None` (`--effort none
 sidebar's "none") sends nothing, for models that reject the parameter, such as Haiku 4.5; the
 page parses its picker with `cli._effort_arg` rather than offering a `None` option, because a
 selectbox already reads `None` as "nothing selected" and that choice never reached the build.
+
+**The output cap is explicit too, for the same reason as effort.** `ModelChoice.build` sets
+`max_tokens=MAX_OUTPUT_TOKENS` (64,000) on every model and never hands deepagents a bare id.
+`langchain-anthropic` takes its default from a table of model profiles, and an id newer than the
+installed package is not in it: 1.6.1 resolves `claude-opus-5` to 128,000 but `claude-opus-5-5`
+and `claude-sonnet-5-5` to a silent **4,096**. Found live, not offline — the fakes have no cap:
+the budget analyst's `budget.md` ran past it, every `write_file` was cut off before its
+`content`, and it retried 34 times ($1.85 of a $2.50 brief). `test_every_role_gets_the_explicit_output_cap`
+reads it off the payload. The next model id newer than the package walks into the same trap
+wherever a model is built without going through `ModelChoice`.
 
 **Approval-gated tools come from one list.** `IRREVERSIBLE_TOOLS` in `tools/__init__.py`
 is the source; `INTERRUPT_ON` is derived from it. A new money-spending or guest-contacting
