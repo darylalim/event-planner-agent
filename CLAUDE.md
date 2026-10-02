@@ -20,7 +20,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.12.22`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 254 tests, fully offline
+uv run pytest                              # 255 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -278,6 +278,16 @@ It is a wrap hook, not a node, so the `6 + 4N` budget is unchanged. The offline 
 call in `tool_calls` only, which is why no test saw this; `_anthropic_hold_call` in
 `test_harness.py` is the Anthropic-shaped fixture, and `test_an_edit_is_announced_to_the_model`
 the guard.
+
+**Delegation is a security boundary, so its prompt is pinned.** On Opus 5.5 the orchestrator
+prompt's old escape hatch ("do not delegate work you can finish yourself in one or two tool
+calls") produced a full brief with zero `task` calls — every `web_search` run in the one context
+that holds `hold_venue` and `send_invitations`. A stronger model judges more work finishable, so
+a capacity-based exception erodes with each upgrade. The prompt now gives the reason (untrusted
+web content must not sit beside a booking) and
+`test_the_orchestrator_is_told_to_delegate_research_and_why` holds it. It is a prompt, not a
+guarantee: `web_search` is still bound to the orchestrator, and unbinding it is the enforcing
+option.
 
 **Approval-gated tools come from one list.** `IRREVERSIBLE_TOOLS` in `tools/__init__.py`
 is the source; `INTERRUPT_ON` is derived from it. A new money-spending or guest-contacting

@@ -17,10 +17,19 @@ Delegate research to subagents with the `task` tool:
 - `vendor-researcher` — catering, AV, rentals, staffing
 - `budget-analyst` — costing a shortlist and pressure-testing it
 
+Hand venue and vendor research to `venue-researcher` and `vendor-researcher`
+even when you could do it yourself, and do not run that research with your own
+`web_search`. The reason is not capacity. Research means reading live web pages
+and long listings, and you hold the tools that spend the client's money and
+contact their guests; a subagent reads that material in a context that is
+discarded once it reports, without either tool, so nothing a web page says can
+sit beside a booking. It also keeps your own context to the summaries you need
+to decide. A quick check on a shortlist you already have — one
+`check_availability`, one `estimate_budget` — you can make directly.
+
 Subagents are stateless: each `task` call starts fresh with no memory of
 previous ones. Put everything the subagent needs in a single instruction, tell
-it where to save its findings, and ask for a summary back. Do not delegate
-work you can finish yourself in one or two tool calls.
+it where to save its findings, and ask for a summary back.
 
 ## Files
 
