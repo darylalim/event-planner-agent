@@ -20,7 +20,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.12.22`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 256 tests, fully offline
+uv run pytest                              # 257 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -133,7 +133,7 @@ adding suppressions.
 ```
 build_agent()                     agent.py — the only place the harness is assembled
 ├── model            claude-opus-5-5 @ effort high   — ORCHESTRATOR_MODEL in models.py
-├── tools            ORCHESTRATOR_TOOLS (7)
+├── tools            ORCHESTRATOR_TOOLS (6)    — no web_search, by design; see invariants
 ├── subagents        SUBAGENTS from subagents.py (3, each with its own narrow tool set,
 │                    and its own model + effort from SUBAGENT_MODELS)
 ├── middleware       TodoListMiddleware()      — must be explicit, see gotchas
@@ -296,9 +296,14 @@ calls") produced a full brief with zero `task` calls — every `web_search` run 
 that holds `hold_venue` and `send_invitations`. A stronger model judges more work finishable, so
 a capacity-based exception erodes with each upgrade. The prompt now gives the reason (untrusted
 web content must not sit beside a booking) and
-`test_the_orchestrator_is_told_to_delegate_research_and_why` holds it. It is a prompt, not a
-guarantee: `web_search` is still bound to the orchestrator, and unbinding it is the enforcing
-option.
+`test_the_orchestrator_is_told_to_delegate_research_and_why` holds it. The prompt is no longer
+the only thing holding it: `web_search` is not in `ORCHESTRATOR_TOOLS`, so the agent with the
+booking tools cannot read the open web at all, and `test_the_orchestrator_cannot_read_the_web`
+checks what is actually *bound*, not the list. The prompt says why the tool is missing and to ask
+a researcher for anything only the web can answer — without that, a model reads a missing tool
+as a fault. Its structured lookups (`search_venues`, `search_vendors`, `check_availability`)
+stay: their results come from the catalogue, not arbitrary pages. Adding any tool that returns
+web content to the orchestrator reopens this; it belongs on a researcher.
 
 **Approval-gated tools come from one list.** `IRREVERSIBLE_TOOLS` in `tools/__init__.py`
 is the source; `INTERRUPT_ON` is derived from it. A new money-spending or guest-contacting
@@ -306,8 +311,9 @@ tool goes in that list — never in two hand-maintained copies.
 
 **A tool rename must land on every side of the three-file loop, and three tests say so.**
 `test_every_bound_tool_is_named_somewhere` catches a tool bound but named by no prompt,
-checked **globally** — the orchestrator names only two of its seven tools and delegates the
-rest, so a per-agent version reports five false positives.
+checked **globally** — the orchestrator names four of its six tools and leaves
+`search_venues` and `search_vendors` to the researchers, so a per-agent version reports two
+false positives.
 `test_no_prompt_instructs_a_tool_its_agent_cannot_call` is its complement and catches what a
 global check structurally cannot: binding is **per agent**, so budget-analyst's prompt naming
 `hold_venue` passes the first test while the subagent burns a turn on a tool it was never

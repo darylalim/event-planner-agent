@@ -607,16 +607,44 @@ def test_the_orchestrator_is_told_to_delegate_research_and_why():
     holding `hold_venue` and `send_invitations`. A stronger model judges more
     work finishable, so a capacity-based escape hatch erodes as models improve;
     the instruction now gives the reason instead, and this test holds both.
+
+    The orchestrator has since lost `web_search` outright
+    (`test_the_orchestrator_cannot_read_the_web`), so the prompt no longer asks
+    it not to search — it explains why it cannot, and where to send a question
+    only the web can answer, so the missing tool reads as a design, not a fault.
     """
     prompt = ORCHESTRATOR_PROMPT
     assert "work you can finish yourself" not in prompt
     assert "even when you could do it yourself" in prompt
-    assert "do not run that research with your own\n`web_search`" in prompt
+    assert "You have no web search of your own" in prompt
     for name in ("venue-researcher", "vendor-researcher"):
         assert f"`{name}`" in prompt
     # The reason, not just the rule: a model weighing whether to delegate
     # needs to know it is about where untrusted content may sit.
-    assert "nothing a web page says can\nsit beside a booking" in prompt
+    assert "nothing a web page says can sit\nbeside a booking" in prompt
+    assert "ask a researcher for it" in prompt
+
+
+def test_the_orchestrator_cannot_read_the_web(scripted):
+    """Structural, not requested: the agent holding `hold_venue` and
+    `send_invitations` gets no tool that returns arbitrary web content.
+
+    Read off what was actually bound to the model, not `ORCHESTRATOR_TOOLS`, so
+    a tool arriving by another route — middleware, a deepagents default — reds
+    too. The researchers must keep it, or the brief loses its only source of
+    reviews and local context.
+    """
+    model = scripted(AIMessage(content="ok"))
+    # Binding happens on the first model call, not at build.
+    _agent(model).invoke(
+        {"messages": [{"role": "user", "content": "hi"}]}, config=THREAD, context=CTX
+    )
+    assert "web_search" not in model.bound_tools
+    assert {"hold_venue", "send_invitations", "task"} <= set(model.bound_tools)
+
+    researchers = {name: own for name, _, own in agent_bindings() if name != "orchestrator"}
+    assert "web_search" in researchers["venue-researcher"]
+    assert "web_search" in researchers["vendor-researcher"]
 
 
 def test_no_prompt_instructs_a_tool_its_agent_cannot_call():

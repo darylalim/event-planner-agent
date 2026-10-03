@@ -120,7 +120,7 @@ for good; the workflow's `workflow_dispatch` trigger is the recovery path.
 ```
 orchestrator (claude-opus-5-5, high effort)
 ├── tools      search_venues · check_availability · search_vendors
-│               estimate_budget · web_search · hold_venue* · send_invitations*
+│               estimate_budget · hold_venue* · send_invitations*
 ├── subagents  venue-researcher · vendor-researcher   (claude-sonnet-5-5, medium)
 │               budget-analyst                        (claude-sonnet-5-5, high)
 ├── skills     venue-sourcing · budget-modeling        (loaded on demand)
@@ -128,6 +128,11 @@ orchestrator (claude-opus-5-5, high effort)
 
                                         * gated behind human approval
 ```
+
+`web_search` belongs to the two researchers and not to the orchestrator, by design:
+the agent that can book venues and contact guests never reads arbitrary web
+pages. Anything only the web can answer, it asks a researcher for — in a
+context that is thrown away once the researcher reports.
 
 Each role's model and effort is chosen, not inherited: the orchestrator's lives
 in `models.py`, the subagents' in `SUBAGENT_MODELS` beside their specs. Effort is
@@ -431,8 +436,18 @@ What the earlier runs found:
   turn carried one signed thinking block and was accepted, so an operator edit is
   compatible with Opus 5.5's history checks.
 
-One run is a measurement, not a distribution: expect cost and wall clock to
-vary from brief to brief, and re-measure before quoting a figure to anyone.
+A second clean run, after `web_search` was removed from the orchestrator:
+**$0.65 and 187s**. Both researchers were delegated, and the orchestrator made
+no attempt to call the tool it no longer has. It did the costing itself — six
+`estimate_budget` calls rather than delegating to `budget-analyst` — which the
+prompt permits in smaller doses and which reads no web content, so the boundary
+holds either way.
+
+Two runs are not a distribution, and these two disagree on substance: $39,884
+realistic and $44,119 worst case in the first, $43,400 and $46,900 in the
+second — the second's worst case over the ceiling. Expect cost, wall clock and
+the verdict's margins to vary from run to run, and re-measure before quoting a
+figure to anyone.
 
 ### The approval gate
 

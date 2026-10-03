@@ -70,7 +70,6 @@ from event_planner.tools import (
     search_vendors,
     search_venues,
     send_invitations,
-    web_search,
 )
 
 #: The orchestrator's model and effort. Both front ends offer these as the
@@ -110,12 +109,18 @@ INTERRUPT_ON: dict[str, Any] = {
     name: {"allowed_decisions": ALLOWED_DECISIONS} for name in IRREVERSIBLE_TOOLS
 }
 
+#: No `web_search`, deliberately: this is the one agent holding the tools that
+#: spend money and contact guests, so it must not also read arbitrary web pages.
+#: The researcher subagents search, in a context discarded once they report.
+#: The prompt used to ask for that separation and Opus 5.5 ran a whole brief
+#: without it, so it is now structural. Its structured lookups stay — their
+#: results come from the catalogue, not the open web.
+#: `test_the_orchestrator_cannot_read_the_web` holds it.
 ORCHESTRATOR_TOOLS = [
     search_venues,
     check_availability,
     search_vendors,
     estimate_budget,
-    web_search,
     hold_venue,
     send_invitations,
 ]
