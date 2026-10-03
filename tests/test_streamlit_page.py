@@ -24,6 +24,7 @@ from types import SimpleNamespace
 import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
+from streamlit.testing.v1.errors import AppTestError
 
 APP = Path(__file__).resolve().parents[1] / "streamlit_app.py"
 
@@ -437,13 +438,12 @@ def _tool(name, content, tool_call_id="call-1"):
 def _panels(at):
     """The tool-result expanders.
 
-    Read through `at.status`, not `at.expander`: `element_tree` sorts an
-    `expandable` block by whether it carries an icon, and routes the ones that
-    do to `Status`. These pass `icon=":material/output:"`, so `at.expander` is
-    empty and an assertion written against it fails for a reason that has
-    nothing to do with the page.
+    Read through `at.expander`. Before Streamlit 1.65, `element_tree` routed an
+    `expandable` block that carried an icon to `Status`, so these panels, which
+    pass `icon=":material/output:"`, were reachable only through `at.status`.
+    It now routes on the block's `state`, which only `st.status` sets.
     """
-    return [s for s in at.status if s.label.endswith(" result")]
+    return [e for e in at.expander if e.label.endswith(" result")]
 
 
 def test_a_collapsed_tool_result_is_not_sent_to_the_browser(page):
@@ -484,7 +484,7 @@ def _panel_keys(at):
     A gated expander is a stateful widget, so it registers its key — which is
     also how a test opens one, since there is no `.open` setter on the block.
     """
-    return sorted(k for k in at.session_state.filtered_state if k.startswith("tool-"))
+    return sorted(k for k in at.session_state.keys() if k.startswith("tool-"))
 
 
 def test_an_opened_panel_renders_its_body(page):
@@ -611,16 +611,17 @@ def test_respond_is_never_offered_even_when_allowed(page):
 
 
 def test_submitting_with_no_decision_sends_nothing(page):
-    """From Streamlit 1.62 `disabled=` is enforced server side, not just in the browser.
+    """The button is disabled, and a disabled button cannot be clicked at all.
 
-    So this pins the framework's enforcement rather than `_approval_panel`'s own
-    `ready` re-check: the click is dropped before the handler either way. The
-    guard itself is covered by the next test, which does not rely on Streamlit
-    to stop the click.
+    From Streamlit 1.65 `AppTest` refuses the click itself, as a browser
+    would, so this pins only that the button is disabled. The page's own
+    `ready` re-check is covered by the next test, which does not rely on
+    Streamlit to stop the click.
     """
     at, fake = page(_interrupt())
     assert at.button[0].disabled
-    at.button[0].click().run()
+    with pytest.raises(AppTestError, match="disabled"):
+        at.button[0].click()
     assert fake.sent == []
     assert any("Approval required" in s.value for s in at.subheader)
 
@@ -707,7 +708,8 @@ def test_malformed_edited_arguments_block_the_submission(page):
     assert any("Not valid JSON" in err.value for err in at.error)
     assert at.button[0].disabled
 
-    at.button[0].click().run()
+    with pytest.raises(AppTestError, match="disabled"):
+        at.button[0].click()
     assert fake.sent == []
 
 
@@ -941,7 +943,8 @@ def test_every_pending_action_needs_its_own_decision(page):
 
     # Only one of the two answered — still not submittable.
     assert at.button[0].disabled
-    at.button[0].click().run()
+    with pytest.raises(AppTestError, match="disabled"):
+        at.button[0].click()
     assert fake.sent == []
 
     at.segmented_control[1].set_value("approve").run()

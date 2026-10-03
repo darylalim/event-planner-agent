@@ -23,7 +23,7 @@ from event_planner.agent import WORKSPACE, build_agent
 from event_planner.cli import DEFAULT_MAX_STEPS
 from event_planner.context import PlannerContext
 from event_planner.models import MAX_OUTPUT_TOKENS, ORCHESTRATOR_MODEL, ModelChoice
-from event_planner.prompts import ORCHESTRATOR_PROMPT
+from event_planner.prompts import EDIT_NOTICE, ORCHESTRATOR_PROMPT
 from event_planner.subagents import SUBAGENT_MODELS, SUBAGENTS
 
 THREAD = {"configurable": {"thread_id": "t-1"}}
@@ -92,7 +92,7 @@ def test_hosted_mode_allows_missing_checkpointer(scripted):
 def test_planning_tool_is_bound(scripted):
     """The orchestrator prompt tells the model to plan with `write_todos`.
 
-    create_deep_agent 0.7.9 does not bind it by default, so agent.py adds
+    create_deep_agent 0.7.21 does not bind it by default, so agent.py adds
     TodoListMiddleware explicitly. Without this test that regression is
     invisible until the model hallucinates a call to a missing tool.
     """
@@ -379,9 +379,15 @@ def _resume(graph, decision):
 
 
 def test_an_edit_is_announced_to_the_model(scripted):
-    """Measured live on Claude Opus 5.5 before this existed: the operator's
+    """Measured live on Claude Opus 5.5 before any note existed: the operator's
     60 -> 45 came back as "45 guests instead of the 60 you asked for — don't
-    pay the deposit", because the API still saw the model's own 60."""
+    pay the deposit", because the API still saw the model's own 60.
+
+    langchain 1.4.2's `HumanInTheLoopMiddleware` announces an edit itself, and
+    `build_agent` replaces deepagents' copy with one carrying our wording.
+    `startswith` pins both halves: the note is ours, so the by-name merge
+    replaced the middleware rather than appending a second one beside it.
+    Live, the default wording left 45 reported as a discrepancy to resolve."""
     graph = _agent(scripted(_anthropic_hold_call(), AIMessage(content="Held.")))
     graph.invoke({"messages": [{"role": "user", "content": "Book it."}]}, THREAD, context=CTX)
     corrected = dict(_hold_call().tool_calls[0]["args"], headcount=45)
@@ -391,8 +397,8 @@ def test_an_edit_is_announced_to_the_model(scripted):
 
     tool_msg = next(m for m in messages if getattr(m, "name", None) == "hold_venue")
     assert "Headcount:   45" in tool_msg.content
-    assert "[Operator edit] The human reviewer changed this `hold_venue` call" in tool_msg.content
-    assert 'You proposed {"headcount": 60}; what executed was {"headcount": 45}' in tool_msg.content
+    assert tool_msg.content.startswith(EDIT_NOTICE)
+    assert '"headcount": 45' in tool_msg.content.split("Tool response:")[0]
 
     # Announced, not repaired: the proposal's tool_use block is history, and
     # Claude Opus 5.5 checks thinking blocks against an edited earlier turn.
@@ -406,12 +412,12 @@ def test_an_approved_call_carries_no_edit_note(scripted):
     graph.invoke({"messages": [{"role": "user", "content": "Book it."}]}, THREAD, context=CTX)
     messages = _resume(graph, {"type": "approve"})["messages"]
     tool_msg = next(m for m in messages if getattr(m, "name", None) == "hold_venue")
-    assert "Operator edit" not in tool_msg.content
+    assert EDIT_NOTICE not in tool_msg.content
 
 
-def test_an_edit_note_needs_a_proposal_it_can_see(scripted):
-    """With no `tool_use` block to compare against, nothing is claimed — the
-    note must never assert a proposal this middleware did not read."""
+def test_an_edit_is_announced_whatever_shape_the_proposal_has(scripted):
+    """The note keys off the decision, not the proposal's `content`, so a
+    plain-string proposal with no `tool_use` block is announced too."""
     graph = _agent(scripted(_hold_call(), AIMessage(content="Held.")))
     graph.invoke({"messages": [{"role": "user", "content": "Book it."}]}, THREAD, context=CTX)
     corrected = dict(_hold_call().tool_calls[0]["args"], headcount=45)
@@ -419,7 +425,8 @@ def test_an_edit_note_needs_a_proposal_it_can_see(scripted):
         graph, {"type": "edit", "edited_action": {"name": "hold_venue", "args": corrected}}
     )["messages"]
     tool_msg = next(m for m in messages if getattr(m, "name", None) == "hold_venue")
-    assert "Operator edit" not in tool_msg.content
+    assert "Headcount:   45" in tool_msg.content
+    assert EDIT_NOTICE in tool_msg.content
 
 
 def test_unlisted_tools_are_not_gated(scripted):

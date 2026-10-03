@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 An event planning agent built on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview)
-(`deepagents` 0.7.9), which wraps LangGraph. `create_deep_agent` returns a compiled
+(`deepagents` 0.7.21), which wraps LangGraph. `create_deep_agent` returns a compiled
 LangGraph graph, so checkpointers, `interrupt()`, streaming, and Studio all work underneath.
 
 `README.md` is detailed and current — read it for the *why* behind the design, the
@@ -141,7 +141,6 @@ build_agent()                     agent.py — the only place the harness is ass
 ├── subagents        SUBAGENTS from subagents.py (3, each with its own narrow tool set,
 │                    and its own model + effort from SUBAGENT_MODELS)
 ├── middleware       TodoListMiddleware()      — must be explicit, see gotchas
-│                    OperatorEditNote()        — tells the model an `edit` changed what ran
 ├── backend          build_backend() → CompositeBackend
 ├── skills           ["/skills/"]              — opened on demand
 ├── memory           ["/memories/AGENTS.md"]   — injected into system prompt every turn
@@ -201,7 +200,7 @@ write the prompts ask for is routed.
 only the write half. Under `virtual_mode=False` deepagents documents the backend as letting an
 absolute path bypass `root_dir` entirely and a relative `..` escape it, so the agent's
 `ls`/`read_file`/`glob`/`grep` would reach the repo's own source and anything else on disk. Be
-precise about the hazard: 0.7.9 already **defaults** it to `True`, so deleting the keyword is a
+precise about the hazard: 0.7.21 already **defaults** it to `True`, so deleting the keyword is a
 no-op today. It is passed explicitly because that default is deepagents' to change, and because
 no test asserts `build_backend()` sets it — a release that flipped it would break nothing
 visible here.
@@ -282,17 +281,31 @@ asserts the decision deepagents makes. **Moving to a model id newer than the ins
 `langchain-anthropic` means bumping it too** — the explicit cap covers output, nothing here covers
 context.
 
-**An `edit` decision reaches the tool, not the model, unless `OperatorEditNote` says so.**
-`HumanInTheLoopMiddleware` rewrites the proposal's `tool_calls` but leaves the `tool_use` block
-in `content`, and that block is what `langchain-anthropic` serialises — so the API is told the
-model asked for its own arguments and then shows it a result for the operator's. Live on Opus
-5.5, a 60 -> 45 headcount edit was reported back as a fault ("don't pay the deposit"). The
-middleware appends a note to the new `ToolMessage` instead of repairing the proposal: Opus 5.5
-checks thinking blocks against edited earlier turns, so the history must stay append-only.
-It is a wrap hook, not a node, so the `6 + 4N` budget is unchanged. The offline fakes put the
-call in `tool_calls` only, which is why no test saw this; `_anthropic_hold_call` in
-`test_harness.py` is the Anthropic-shaped fixture, and `test_an_edit_is_announced_to_the_model`
-the guard.
+**An `edit` decision reaches the model only through the edit notice, hence `langchain>=1.4.2`.**
+The proposal keeps the model's own arguments — in its `tool_use` block, which is what
+`langchain-anthropic` serialises, and since 1.4.2 in `tool_calls` too — and
+`HumanInTheLoopMiddleware.wrap_tool_call` substitutes the operator's only at execution. So the
+API sees the model ask for one thing and a result for another. Live on Opus 5.5, before any
+note existed, a 60 -> 45 headcount edit was reported back as a fault ("don't pay the deposit").
+1.4.2 prepends a notice to the `ToolMessage` naming the call that actually ran; it replaced
+this repo's own `OperatorEditNote`, which did the same from outside and went silent on that
+release, because it compared the proposal against `tool_calls` and both now hold the model's
+arguments. The fix stays append-only, which matters: Opus 5.5 checks thinking blocks against
+edited earlier turns. `langchain` is a direct dependency only to hold that floor — nothing
+under `src/` needs a newer one otherwise. `_anthropic_hold_call` in `test_harness.py` is the
+Anthropic-shaped fixture, and `test_an_edit_is_announced_to_the_model` the guard.
+
+**The notice's wording is ours, and a by-name merge is what installs it.** langchain's default
+says only "intentional and authorized", and live that left 45 reported as a discrepancy to
+resolve. `prompts.EDIT_NOTICE` says to treat the values as confirmed and to revisit anything
+derived from the originals; live it did both. deepagents builds `HumanInTheLoopMiddleware` from
+`interrupt_on` with no `edit_notice` argument, so `build_agent` passes its own copy in
+`middleware=`, and deepagents' `_apply_custom_middleware` **replaces a same-named entry in
+place**. On a name mismatch it *appends* instead, leaving a second, default-worded gate beside ours (unmeasured).
+The test's `startswith(EDIT_NOTICE)` catches both failure modes, since only a replaced
+middleware carries our wording; deleting the entry was measured making it fail. `interrupt_on`
+is still passed too, so the gate never depends on the merge. Changing the wording is a model
+behaviour change: rerun `live_check.py edit`.
 
 **Delegation is a security boundary, so its prompt is pinned.** On Opus 5.5 the orchestrator
 prompt's old escape hatch ("do not delegate work you can finish yourself in one or two tool
@@ -500,7 +513,8 @@ a disabled widget as stale or forged. The submit handler still re-checks `ready`
 that copy is what holds if the pin ever moves back. The upgrade did cost
 `test_submitting_with_no_decision_sends_nothing` its teeth: `ready` and `disabled=` derive
 from the same value, so no real click can now reach the branch with `ready` false, and it
-passes whether or not the guard is there.
+passes whether or not the guard is there. Since 1.65 `AppTest` refuses a click on a disabled
+widget outright (`AppTestError`), so that test now asserts only the refusal.
 `test_a_submit_that_slips_past_the_disabled_button_sends_nothing` restores the coverage by
 forcing the button to report a click — the only way left to exercise the case the guard is
 for.
@@ -581,7 +595,7 @@ README's
 default 25. Adding middleware changes this constant —
 `test_step_budget_survives_a_long_planning_session` guards it.
 
-## deepagents 0.7.9 vs. published docs
+## deepagents 0.7.21 vs. published docs
 
 Three documented behaviours don't match the installed package:
 
@@ -612,17 +626,20 @@ is set to a dummy value only to clear the credential gate — no model is built 
 leaves the process. Prefer this over asserting on rendering helpers: the bugs live in the
 wiring, and the disabled-button bug above was invisible to every unit-level test.
 
-One `AppTest` trap: **an expander with an `icon` is not in `at.expander`.** `element_tree`
-sorts `expandable` blocks by whether they carry an icon and routes those that do to
-`Status`, so every panel this page renders — tool results and the middleware note both pass
-`icon=` — is reachable only through `at.status`. An assertion written against `at.expander`
-gets an empty list and fails for a reason that has nothing to do with the page;
-`_panels()` in `test_streamlit_page.py` exists to keep that in one place.
+One `AppTest` trap moved under the suite: **which list an expander lands in depends on the
+Streamlit version.** Up to 1.64 `element_tree` routed any `expandable` block carrying an
+`icon` to `Status`, so every panel this page renders — tool results and the middleware note
+both pass `icon=` — was reachable only through `at.status`. 1.65 routes on the block's
+`state`, which only `st.status` sets, so they are now in `at.expander`. An assertion against
+the wrong one gets an empty list and fails for a reason that has nothing to do with the page;
+`_panels()` in `test_streamlit_page.py` keeps that in one place, and the `streamlit>=1.65.0`
+floor keeps it from going stale.
 
 Neither block exposes `.open`, which reads like "a test cannot open a panel" and is wrong —
 that was claimed here and in README once, and it hid a real coverage gap. A *gated* expander
 is a widget, so it registers its key in session state: `at.session_state[key] = True`
-followed by `at.run()` opens it. `_panel_keys()` collects those keys.
+followed by `at.run()` opens it. `_panel_keys()` collects those keys from
+`at.session_state.keys()` — 1.65's proxy no longer forwards `filtered_state`.
 
 Stub tools (`search_venues`, `check_availability`, `search_vendors`, `hold_venue`,
 `send_invitations`) are deterministic on purpose so a behaviour regression is visible rather

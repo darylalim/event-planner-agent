@@ -10,7 +10,8 @@ requires-python = ">=3.11,<4.0"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
-    "deepagents>=0.7.9",
+    "deepagents>=0.7.21",
+    "langchain>=1.4.2",
     "langchain-anthropic>=1.7.5",
     "langchain-tavily>=0.2.18",
     "langgraph>=1.2.11",
@@ -24,7 +25,7 @@ event-planner = "event_planner.cli:main"
 
 [project.optional-dependencies]
 web = [
-    "streamlit>=1.62.0",
+    "streamlit>=1.65.0",
 ]
 
 [build-system]

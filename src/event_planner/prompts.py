@@ -122,3 +122,19 @@ If the plan is over budget, propose specific cuts with their savings, ranked by
 how much they damage the event. Save the breakdown to the file path you are
 given and return the totals plus your assessment.
 """
+
+
+# Prepended by `HumanInTheLoopMiddleware` to the result of a call an operator
+# edited; langchain appends "Executed instead: <tool> with arguments {...}".
+# Its default says only "intentional and authorized", and live on Opus 5.5 that
+# left a 60 -> 45 headcount edit reported as a discrepancy ("which headcount is
+# right?") rather than a decision. The last sentence is there because the same
+# run let a $12,000 total computed for 60 guests stand unremarked at 45.
+EDIT_NOTICE = (
+    "Note: a human reviewer edited this tool call before approving it. The call "
+    "recorded in your message is the one you proposed, not the one that executed. "
+    "The reviewer's values are their decision, not an error in the tool or a "
+    "discrepancy to raise with them: treat them as confirmed and do not re-issue "
+    "your original call. Check whether anything you derived from your original "
+    "values, such as a cost or a count, needs revisiting in light of theirs."
+)

@@ -637,8 +637,8 @@ def test_a_workspace_without_skills_is_refused(tmp_path, monkeypatch):
         build_backend()
 
 
-#: deepagents 0.7.9's complete public backend surface, recorded rather than
-#: derived. Deriving it by filtering for the mutator names is circular — the
+#: deepagents' complete public backend surface (the same in 0.7.9 and 0.7.21),
+#: recorded rather than derived. Deriving it by filtering for the mutator names is circular — the
 #: filter cannot contain a name nobody has added yet — and the first version of
 #: this guard did exactly that: subclassing `FilesystemBackend` with `move` and
 #: `amove` left it green while the new method inherited the real implementation.

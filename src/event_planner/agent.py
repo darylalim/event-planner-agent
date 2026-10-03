@@ -30,7 +30,7 @@ Three things worth knowing if you change this:
 * `interrupt_on` silently does nothing without a checkpointer. The build below
   will refuse to hand back an un-gated agent rather than let that pass quietly.
 * `TodoListMiddleware` is added explicitly. Despite what the Deep Agents docs
-  say, `create_deep_agent` in 0.7.9 does not bind `write_todos` on its own —
+  say, `create_deep_agent` in 0.7.21 does not bind `write_todos` on its own —
   verified by inspecting the tools actually bound to the model. The
   orchestrator prompt tells the agent to plan with `write_todos`, so without
   this the model would be instructed to call a tool that does not exist.
@@ -49,7 +49,7 @@ from deepagents.backends.protocol import (
     FileUploadResponse,
     WriteResult,
 )
-from langchain.agents.middleware import TodoListMiddleware
+from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
 from langgraph.store.base import BaseStore
 
 from event_planner.context import (
@@ -58,9 +58,8 @@ from event_planner.context import (
     events_namespace,
     memory_namespace,
 )
-from event_planner.middleware import OperatorEditNote
 from event_planner.models import ORCHESTRATOR_MODEL, Effort, ModelChoice
-from event_planner.prompts import ORCHESTRATOR_PROMPT
+from event_planner.prompts import EDIT_NOTICE, ORCHESTRATOR_PROMPT
 from event_planner.subagents import SUBAGENT_MODELS, SUBAGENTS
 from event_planner.tools import (
     IRREVERSIBLE_TOOLS,
@@ -301,13 +300,21 @@ def build_agent(
         tools=ORCHESTRATOR_TOOLS,
         system_prompt=ORCHESTRATOR_PROMPT,
         subagents=subagents,
-        # TodoListMiddleware: not included by create_deep_agent in 0.7.9 — see
-        # module docstring. OperatorEditNote: an `edit` decision otherwise
-        # reaches the tool but not the model — see middleware.py. A wrap hook,
-        # not a node, so it leaves the 6 + 4N step budget alone.
+        # TodoListMiddleware: not included by create_deep_agent in 0.7.21 — see
+        # module docstring.
+        # HumanInTheLoopMiddleware: deepagents builds one from `interrupt_on`
+        # but passes no `edit_notice`, and merges custom middleware by name, so
+        # this replaces it in place — same position, same 6 + 4N step budget.
+        # `interrupt_on` below stays, so the gate does not depend on the merge.
         # Cast: both are generic over context, and the checker treats that
         # parameter as invariant against our PlannerContext.
-        middleware=cast("Any", (TodoListMiddleware(), OperatorEditNote())),
+        middleware=cast(
+            "Any",
+            (
+                TodoListMiddleware(),
+                HumanInTheLoopMiddleware(interrupt_on=INTERRUPT_ON, edit_notice=EDIT_NOTICE),
+            ),
+        ),
         backend=build_backend(),
         skills=["/skills/"],
         # Loaded into the system prompt every turn, unlike skills which the

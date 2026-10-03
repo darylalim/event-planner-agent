@@ -440,6 +440,15 @@ What the earlier runs found:
   number" — and flags that the $12,000 total did not move with it. The resumed
   turn carried one signed thinking block and was accepted, so an operator edit is
   compatible with Opus 5.5's history checks.
+  `OperatorEditNote` has since been removed: langchain 1.4.2 ships the same
+  append-only notice in `HumanInTheLoopMiddleware`, and the repo's own copy went
+  silent on that release. Run live (`live_check.py edit`, $0.07), langchain's
+  default wording fixed the fault but not the framing: the model wrote "45 (you
+  asked for 60)" and asked the operator "which headcount is right?", and the
+  $12,000 total went unremarked. With `prompts.EDIT_NOTICE` passed as
+  `edit_notice` ($0.02), it listed 45 as settled and flagged that the $12,000
+  "was set for 60 guests and kept at 45". Both resumed turns carried one thinking
+  block and were accepted.
 
 A second clean run, after `web_search` was removed from the orchestrator:
 **$0.65 and 187s**. Both researchers were delegated, and the orchestrator made
@@ -557,7 +566,7 @@ and not by the suite. The invariant that makes the isolation safe — that the
 panel reads no graph state while rendering — is pinned by
 `test_the_panel_reads_no_graph_state_while_rendering`.
 
-## Notes on `deepagents` 0.7.9
+## Notes on `deepagents` 0.7.21
 
 Three places where the published guidance and the installed package disagree.
 All were found by inspecting the package, and all are covered by tests:
