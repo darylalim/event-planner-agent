@@ -12,6 +12,7 @@ from typing import Any, cast
 import pytest
 from conftest import BACKTICKED, agent_bindings, bound_tool_names
 from deepagents._models import get_model_identifier
+from deepagents.middleware.summarization import compute_summarization_defaults
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -208,6 +209,25 @@ def test_a_preconfigured_model_is_used_as_given(built, scripted):
     lets every other test here hand in a scripted fake."""
     fake = scripted()
     assert built(model=fake)["model"] is fake
+
+
+def test_every_role_compacts_against_its_real_context_window(built):
+    """deepagents sizes compaction from the model's profile, and falls back to
+    fixed numbers when there is none: summarise at 170,000 tokens, and truncate
+    old tool arguments after 20 messages — rather than at 85% of the window.
+
+    `langchain-anthropic` 1.6.1 had no profile for `claude-opus-5-5` or
+    `claude-sonnet-5-5`, so the roster ran on that fallback: a 1M-token window
+    compacted at 170k. Unlike the 4,096 output cap, nothing failed — it only
+    summarised away detail sooner, and compaction rewrites the history that
+    Opus 5.5 checks its thinking blocks against. Asserted on the decision
+    deepagents makes, not on the profile, so a renamed profile key still reds.
+    """
+    captured = built()
+    models = [captured["model"], *(spec["model"] for spec in captured["subagents"])]
+    for model in models:
+        defaults = compute_summarization_defaults(model)
+        assert defaults["trigger"] == ("fraction", 0.85), get_model_identifier(model)
 
 
 def test_no_effort_sends_none_but_keeps_the_output_cap():

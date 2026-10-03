@@ -20,7 +20,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.12.22`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 255 tests, fully offline
+uv run pytest                              # 256 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -266,6 +266,17 @@ the budget analyst's `budget.md` ran past it, every `write_file` was cut off bef
 `content`, and it retried 34 times ($1.85 of a $2.50 brief). `test_every_role_gets_the_explicit_output_cap`
 reads it off the payload. The next model id newer than the package walks into the same trap
 wherever a model is built without going through `ModelChoice`.
+
+**The same missing profile also sized compaction, and that one cannot be set from here.**
+deepagents' `compute_summarization_defaults` reads `max_input_tokens` from the profile; without
+it, it summarises at a fixed 170,000 tokens and truncates old tool arguments after 20 messages,
+instead of at 85% of the window. So on 1.6.1 the 5.5 roster compacted a 1M-token window at 170k
+— silently, since nothing fails, it only summarises away detail sooner and rewrites history
+Opus 5.5 checks its thinking blocks against. The floor is therefore `langchain-anthropic>=1.7.5`,
+the first release with both 5.5 profiles, and `test_every_role_compacts_against_its_real_context_window`
+asserts the decision deepagents makes. **Moving to a model id newer than the installed
+`langchain-anthropic` means bumping it too** — the explicit cap covers output, nothing here covers
+context.
 
 **An `edit` decision reaches the tool, not the model, unless `OperatorEditNote` says so.**
 `HumanInTheLoopMiddleware` rewrites the proposal's `tool_calls` but leaves the `tool_use` block
