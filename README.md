@@ -67,6 +67,7 @@ uv run event-planner --model claude-opus-5 --effort xhigh   # orchestrator only
 uv run streamlit run streamlit_app.py                 # browser UI
 uv run --with "langgraph-cli[inmem]" langgraph dev    # LangGraph Studio
 uv run pytest                                         # harness tests
+uv run scripts/live_check.py brief --yes-spend        # LIVE check, ~$0.65-$1
 ```
 
 In the CLI: `/state` lists what is stored for the current user, `/export` writes
@@ -395,6 +396,10 @@ half the cost.
 
 ### The current roster
 
+Reproduce any of this with `uv run scripts/live_check.py brief --yes-spend` (or
+`edit`); it prints the transcript's shape, the verdict, and cost per role, and
+`usage --db … --thread …` re-prices a thread already on disk for free.
+
 The same 85-guest brief, re-run on Opus 5.5 (`high`) orchestrating Sonnet 5.5
 subagents. Six live runs — four briefs, two `edit` checks — ~$3.90 in all; only the
 last brief is a clean measurement, and the runs before it are each why
@@ -593,6 +598,9 @@ tests/
   test_webui.py          the web front end's decisions, incl. parity with the CLI
   test_streamlit_page.py the real page driven through Streamlit's AppTest
   test_tools.py          tool correctness — dates, budgets, booking refusals
+  test_live_check.py     the live script's cost accounting, offline
+scripts/
+  live_check.py          run the real model and report cost per role (spends money)
 ```
 
 ## License

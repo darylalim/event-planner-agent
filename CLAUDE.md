@@ -20,7 +20,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.12.22`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 257 tests, fully offline
+uv run pytest                              # 266 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -38,6 +38,10 @@ uv run --with "langgraph-cli[inmem]" langgraph dev
 uvx ruff check .                           # lint  — config in pyproject.toml, not a dep
 uvx ruff format .                          # format — enforced by CI, run before committing
 uvx ty check                               # types — config in pyproject.toml, not a dep
+
+uv run scripts/live_check.py brief --yes-spend   # LIVE: the standard brief, ~$0.65-$1
+uv run scripts/live_check.py edit --yes-spend    # LIVE: an `edit` approval, ~$0.05
+uv run scripts/live_check.py usage --db P --thread T   # per-role cost of a thread; free
                                            # These three resolve LATEST; the hook and CI
                                            # pin older ones — see two paragraphs below.
 ```
@@ -596,7 +600,8 @@ The model is faked throughout (`ScriptedModel` in `conftest.py`, which stubs `bi
 to record what was bound). Tests cover the harness — approval gating, storage routing, tool
 binding, step budget — not model quality, and must keep running without an API key or
 network. Files are split by concern: `test_harness.py`, `test_security.py`,
-`test_approval_cli.py`, `test_webui.py`, `test_streamlit_page.py`, `test_tools.py`.
+`test_approval_cli.py`, `test_webui.py`, `test_streamlit_page.py`, `test_tools.py`, and
+`test_live_check.py`, which tests the live script's *accounting* offline and never its live modes.
 
 `test_streamlit_page.py` runs the real page through `streamlit.testing.v1.AppTest`,
 which execs the script and exposes its widgets. Two things make that work: the page
@@ -627,3 +632,13 @@ Tavily and degrades to an explanatory string without `TAVILY_API_KEY`.
 Model-dependent behaviour that offline tests cannot reach — adaptive thinking blocks in a
 resumed approval, skill application, cross-session recall — is verified against the live
 model and recorded in README.md's "Verified live" section. Update it when those paths change.
+
+`scripts/live_check.py` is how. It sits outside `src/` so no wheel carries it, and outside
+pytest's `test_*.py` pattern so nothing collects it; `brief` and `edit` refuse to run without
+`--yes-spend`, and default to a fresh database under the system temp dir — never
+`.state/planner.sqlite`, since a live run writes memories every later session for that user
+loads. Run `brief` after changing a model, an effort level, a prompt or the middleware stack:
+every finding in README's "The current roster" came from a run like it, and none was visible
+offline. Its cost figures count each subagent's checkpoint namespace; summing only the root
+thread is how README once put a $2.10 brief at $0.87, and `test_a_subagents_usage_is_counted`
+guards that.
