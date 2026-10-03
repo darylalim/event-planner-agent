@@ -18,6 +18,15 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test")
 
+# No traces leave the suite. A page test runs the real `_load_env`, which puts
+# `.env`'s LANGSMITH_TRACING=true and real API key into os.environ for the rest
+# of the session; a full run escaped only because langsmith's lru_cached env
+# lookup had already cached "off". `pytest tests/test_streamlit_page.py
+# tests/test_webui.py` did not, and attempted 45 uploads. TRACING_V2 is read
+# before TRACING in both namespaces, so this beats a stray LANGCHAIN_TRACING_V2
+# in the shell too, and load_dotenv never overrides a variable already set.
+os.environ["LANGSMITH_TRACING_V2"] = "false"
+
 
 class ScriptedModel(GenericFakeChatModel):
     """Returns a fixed list of AIMessages, one per model call.

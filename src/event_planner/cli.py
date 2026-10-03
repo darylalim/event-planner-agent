@@ -84,6 +84,42 @@ STATE_DIR = PROJECT_ROOT / ".state"
 #: default, and dropping it uncaps a runaway session instead of stranding one.
 DEFAULT_MAX_STEPS = 200
 
+#: Root run name in LangSmith. Without it every trace is titled `LangGraph`,
+#: which is also what Studio and any other graph in the same project emit.
+RUN_NAME = "event-planner"
+
+
+def run_config(
+    thread: str,
+    *,
+    user_id: str | None,
+    front_end: str,
+    max_steps: int = DEFAULT_MAX_STEPS,
+) -> dict[str, Any]:
+    """The `config` every entry point invokes the graph with — one copy.
+
+    LangGraph already copies `thread_id` into trace metadata, which is what
+    LangSmith's Threads view groups on. `user_id` is not in `configurable` (it
+    travels in `context=`), so a trace says nothing about whose session it was
+    unless it is set here. It is omitted rather than sent as `None`, matching
+    the unidentified branch in `context.py`. `front_end` is both a tag and
+    metadata, so the CLI, browser and live-check runs can be told apart.
+
+    LangGraph also writes this metadata into every checkpoint, tracing or not.
+    That stays local, in the same database whose store already keys on the id.
+    """
+    metadata: dict[str, Any] = {"front_end": front_end}
+    if user_id:
+        metadata["user_id"] = user_id
+    return {
+        "configurable": {"thread_id": thread},
+        "recursion_limit": max_steps,
+        "run_name": RUN_NAME,
+        "tags": [front_end],
+        "metadata": metadata,
+    }
+
+
 BANNER = """\
 Event Planner  (Deep Agents)
   thread: {thread}   user: {user}   model: {model} ({effort} effort)
@@ -596,10 +632,9 @@ def main() -> int:
             # read like the other startup refusals rather than as a traceback.
             print(f"error: {exc}", file=sys.stderr)
             return 2
-        config = {
-            "configurable": {"thread_id": args.thread},
-            "recursion_limit": args.max_steps,
-        }
+        config = run_config(
+            args.thread, user_id=args.user, front_end="cli", max_steps=args.max_steps
+        )
         context = PlannerContext(user_id=args.user)
 
         print(

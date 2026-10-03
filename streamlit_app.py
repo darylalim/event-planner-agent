@@ -53,7 +53,14 @@ import streamlit as st
 from langgraph.types import Command
 
 from event_planner.agent import DEFAULT_EFFORT, DEFAULT_MODEL, build_agent
-from event_planner.cli import NO_EFFORT, PROJECT_ROOT, STATE_DIR, _effort_arg, _load_env
+from event_planner.cli import (
+    NO_EFFORT,
+    PROJECT_ROOT,
+    STATE_DIR,
+    _effort_arg,
+    _load_env,
+    run_config,
+)
 from event_planner.context import PlannerContext
 from event_planner.models import EFFORT_LEVELS, Effort
 from event_planner.webui import (
@@ -829,13 +836,12 @@ except Exception as exc:  # noqa: BLE001 - surface it rather than a blank page
     )
     st.stop()
 
-config: dict[str, Any] = {
-    "configurable": {"thread_id": thread},
-    # A ceiling, not a rescue: create_deep_agent binds 9_999 onto the compiled
-    # graph, so LangGraph's default of 25 never applies and this lowers the
-    # bound. Same budget the CLI uses, imported rather than restated.
-    "recursion_limit": DEFAULT_MAX_STEPS,
-}
+# A ceiling, not a rescue: create_deep_agent binds 9_999 onto the compiled
+# graph, so LangGraph's default of 25 never applies and this lowers the bound.
+# Same budget and trace tagging the CLI uses, built by its helper.
+config: dict[str, Any] = run_config(
+    thread, user_id=user_id, front_end="web", max_steps=DEFAULT_MAX_STEPS
+)
 context = PlannerContext(user_id=user_id)
 
 # Claimed now, filled after the turn runs. Listing the store here directly would

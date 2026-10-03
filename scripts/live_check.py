@@ -47,6 +47,7 @@ from event_planner.cli import (
     _check_db_outside_workspace,
     _load_env,
     credentials_problem,
+    run_config,
 )
 from event_planner.context import PlannerContext
 from event_planner.subagents import SUBAGENTS
@@ -197,7 +198,9 @@ def report(usages: list[Usage]) -> str:
 
 
 def _config(thread: str) -> dict[str, Any]:
-    return {"configurable": {"thread_id": thread}, "recursion_limit": DEFAULT_MAX_STEPS}
+    return run_config(
+        thread, user_id=USER.user_id, front_end="live_check", max_steps=DEFAULT_MAX_STEPS
+    )
 
 
 def _text(message: Any) -> str:

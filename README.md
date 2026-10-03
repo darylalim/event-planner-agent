@@ -48,7 +48,9 @@ cp .env.example .env   # then fill in ANTHROPIC_API_KEY
 
 `ANTHROPIC_API_KEY` is required. `TAVILY_API_KEY` is optional — without it,
 `web_search` degrades gracefully, telling the agent to rely on the structured
-directory and to flag that reputation data went unchecked.
+directory and to flag that reputation data went unchecked. `LANGSMITH_API_KEY`
+turns on tracing (see [Tracing](#tracing), including what it sends off the
+machine).
 
 The browser UI's dependency is a `web` **extra** rather than a core one, so the
 CLI and the LangGraph Platform image — neither of which imports Streamlit — do
@@ -261,6 +263,40 @@ roughly five tool calls — but it never applies here, because
 the 200 both front ends pass is a deliberate cap on a runaway session, not a
 rescue from 25: removing it uncaps to 9999 rather than restoring the default.
 Tune with `--max-steps`.
+
+### Tracing
+
+The graph is LangGraph, so [LangSmith](https://docs.smith.langchain.com/)
+tracing needs no code: set `LANGSMITH_API_KEY` and `LANGSMITH_TRACING=true`
+(both are in `.env.example`) and every model call, tool call and subagent
+`task` arrives as one tree per turn in the `LANGSMITH_PROJECT` project.
+`langsmith` is already installed as a dependency of `langchain-core`.
+
+What the code adds is the ability to *find* a trace. All three entry points
+build their run config with `cli.run_config`, so each root run is named
+`event-planner` and carries:
+
+| Field | Value | Where it comes from |
+| --- | --- | --- |
+| `thread_id` | the conversation | LangGraph copies it from `configurable`; LangSmith's Threads view groups on it |
+| `user_id` | the `--user` / sidebar id, omitted when there is none | `run_config` — it travels in `context=`, which no tracer reads |
+| `front_end` (also a tag) | `cli`, `web` or `live_check` | `run_config` |
+
+`langgraph dev` and a platform deployment pass their own config, so their traces
+carry `thread_id` but not the other two.
+
+**Tracing sits outside tenant isolation.** Namespacing keeps one planner's
+briefs, guest lists and memories away from another's *session*. A trace, though,
+records every prompt, tool result and file write in full and sends them to one
+LangSmith project, where anyone with access to that project can read every
+tenant's data. Turn it on only where that is acceptable.
+
+The test suite never traces. `tests/conftest.py` pins `LANGSMITH_TRACING_V2=false`,
+the name langsmith reads first. Without that line a narrowed run such as
+`pytest tests/test_streamlit_page.py tests/test_webui.py` tried 45 uploads with the
+real key, because a page test's real `_load_env` puts `.env`'s values into the
+environment. A full run escaped only because langsmith caches the lookup and had
+already read "off". `test_the_suite_never_traces` guards it.
 
 ### The browser front end
 

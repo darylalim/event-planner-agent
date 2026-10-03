@@ -554,6 +554,79 @@ def test_step_budget_survives_a_long_planning_session(scripted):
 
 
 # --------------------------------------------------------------------------- #
+# tracing
+# --------------------------------------------------------------------------- #
+
+
+def _root_run(graph, config: dict[str, Any]) -> Any:
+    """The root run a tracer receives — the same object LangSmith would be sent.
+
+    `RunCollectorCallbackHandler` is a `BaseTracer`, so it sees what the
+    LangSmith tracer sees, without the network.
+    """
+    from langchain_core.tracers.run_collector import RunCollectorCallbackHandler
+
+    collector = RunCollectorCallbackHandler()
+    graph.invoke(
+        {"messages": [{"role": "user", "content": "Hello."}]},
+        config={**config, "callbacks": [collector]},
+        context=CTX,
+    )
+    (root,) = collector.traced_runs
+    return root
+
+
+def test_a_trace_says_whose_session_it_was_and_where_it_ran(scripted):
+    """`user_id` travels in `context=`, which no tracer reads, so without
+    `run_config` a trace could not be traced back to a planner at all."""
+    from event_planner.cli import RUN_NAME, run_config
+
+    graph = _agent(scripted(AIMessage(content="Hi.")))
+    root = _root_run(graph, run_config("trace-1", user_id="alice@example.com", front_end="web"))
+
+    assert root.name == RUN_NAME
+    assert "web" in (root.tags or [])
+    metadata = root.extra["metadata"]
+    assert metadata["user_id"] == "alice@example.com"
+    assert metadata["front_end"] == "web"
+    # LangGraph's own propagation; LangSmith's Threads view groups on it.
+    assert metadata["thread_id"] == "trace-1"
+
+
+def test_an_unidentified_session_sends_no_user_id(scripted):
+    """Matches `PlannerContext`: no id means none, never a placeholder."""
+    from event_planner.cli import run_config
+
+    graph = _agent(scripted(AIMessage(content="Hi.")))
+    root = _root_run(graph, run_config("trace-2", user_id=None, front_end="cli"))
+    assert "user_id" not in root.extra["metadata"]
+
+
+def test_the_suite_never_traces(monkeypatch):
+    """conftest pins tracing off; prove it survives what `.env` and a stale
+    shell can put in the environment.
+
+    Both names are set because they are the two ways it was measured or
+    documented failing: `.env`'s LANGSMITH_TRACING=true leaking via the page
+    tests' real `_load_env`, and `.env.example`'s warning that a
+    LANGCHAIN_TRACING_V2 outranks LANGSMITH_TRACING. `get_env_var` is
+    lru_cached, so it is cleared on both sides or this reads a stale answer.
+    """
+    from langsmith.utils import get_env_var, tracing_is_enabled
+
+    # Declared through @overload stubs, so type checkers never see the
+    # lru_cache wrapper that actually carries `cache_clear`.
+    cache = cast(Any, get_env_var)
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "true")
+    cache.cache_clear()
+    try:
+        assert tracing_is_enabled() is False
+    finally:
+        cache.cache_clear()
+
+
+# --------------------------------------------------------------------------- #
 # prompt/tool drift
 # --------------------------------------------------------------------------- #
 #

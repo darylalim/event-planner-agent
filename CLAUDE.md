@@ -20,7 +20,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.12.22`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 266 tests, fully offline
+uv run pytest                              # 269 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -594,6 +594,18 @@ README's
 *lowers* `create_deep_agent`'s `recursion_limit: 9_999` rather than raising LangGraph's
 default 25. Adding middleware changes this constant —
 `test_step_budget_survives_a_long_planning_session` guards it.
+
+**Every entry point builds its run config with `cli.run_config`, and the suite never
+traces.** Tracing is LangSmith via env vars, with no code. `run_config` is what lets a trace
+be found: it names the root run `event-planner` and adds `user_id` (omitted when `None`)
+and `front_end` (`cli`/`web`/`live_check`) as metadata. `user_id` has to be added there
+because it travels in `context=`, which no tracer reads; `thread_id` LangGraph propagates
+itself. A new entry point that writes its own config dict produces untagged traces.
+Separately, `conftest.py` pins `LANGSMITH_TRACING_V2=false`. The page tests' real
+`_load_env` leaks `.env`'s `LANGSMITH_TRACING=true` and the real key into `os.environ`, and
+a narrowed run once attempted 45 uploads; the full run only escaped because langsmith's
+`get_env_var` is `lru_cache`d. `test_the_suite_never_traces` guards it. README's "Tracing"
+records why traces sit outside tenant isolation.
 
 ## deepagents 0.7.21 vs. published docs
 
