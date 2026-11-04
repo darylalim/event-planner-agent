@@ -1,6 +1,6 @@
 # Plan: require CI to pass before code reaches `main`
 
-Status: not started. Written 2026-11-04 for the operator to apply.
+Status: applied 2026-11-04 as ruleset `26548873`. Written 2026-11-04 for the operator to apply.
 This is a repository setting, not a code change. **The operator applies it.** It
 takes effect immediately on a public repo, so a session must not run the `POST`
 below without their explicit go-ahead.

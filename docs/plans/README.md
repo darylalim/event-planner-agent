@@ -13,7 +13,7 @@ of the plan.
 
 | Order | Plan | Who acts | Estimated live spend | Needs first | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1 | [required-ci-checks.md](required-ci-checks.md) | Operator | None | Nothing | Not started |
+| 1 | [required-ci-checks.md](required-ci-checks.md) | Operator | None | Nothing | Done |
 | 2 | [dependency-upgrade.md](dependency-upgrade.md) | Session | $0.70-$1.05 | 1 | Not started |
 | 3 | [harness-gaps.md](harness-gaps.md) | Session | None | 2 | Not started |
 | 4 | [agent-evaluation.md](agent-evaluation.md) | Session | $2-3 smoke, $15-25 full | 2 | Not started |
