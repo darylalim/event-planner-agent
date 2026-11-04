@@ -549,7 +549,7 @@ def test_step_budget_survives_a_long_planning_session(scripted):
     )
     bound = (getattr(graph, "config", None) or {}).get("recursion_limit")
     assert bound is not None, "deepagents no longer binds a recursion_limit to the graph"
-    assert DEFAULT_MAX_STEPS < bound, (
+    assert bound > DEFAULT_MAX_STEPS, (
         f"DEFAULT_MAX_STEPS={DEFAULT_MAX_STEPS} caps nothing: create_deep_agent binds "
         f"{bound} onto the compiled graph, so any larger value is inert"
     )

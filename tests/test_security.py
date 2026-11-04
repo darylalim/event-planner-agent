@@ -712,7 +712,7 @@ def test_the_read_only_root_refuses_every_mutator(tmp_path):
     assert all(r.error for r in asyncio.run(backend.aupload_files([("/skills/SKILL.md", b"x")])))
 
     assert target.read_text(encoding="utf-8") == "original", "a refusal still wrote"
-    assert MUTATORS_COVERED == set(ReadOnlyFilesystemBackend.MUTATORS)
+    assert set(ReadOnlyFilesystemBackend.MUTATORS) == MUTATORS_COVERED
 
 
 #: The sync names the class overrides. Kept beside the behavioural test so the

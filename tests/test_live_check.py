@@ -29,7 +29,8 @@ def live() -> ModuleType:
     """The script, imported from its path: `scripts/` is not a package, by
     design, so it ships in no wheel."""
     spec = importlib.util.spec_from_file_location("live_check", SCRIPT)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     # Registered before exec: `@dataclass` resolves string annotations through
     # `sys.modules[cls.__module__]`, and a module loaded by path is not there.

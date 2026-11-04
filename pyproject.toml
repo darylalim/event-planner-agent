@@ -1,12 +1,12 @@
 [project]
 name = "event-planner-agent"
 version = "0.4.0"
-description = "Event planning agent on Deep Agents for driving an event brief to a bookable plan."
+description = "Event planning agent built on Deep Agents: turns a brief into a costed plan, with human approval before anything is booked or sent."
+authors = [{ name = "Daryl Lim" }]
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
 # PEP 639: an SPDX expression plus the file to ship in the wheel's metadata.
-# Needs hatchling >= 1.27, which `[build-system]` gets by leaving the version
-# open. Do not also add a `License ::` classifier — the two forms conflict.
+# Needs hatchling >= 1.27, which `[build-system]` requires. Do not also add a `License ::` classifier — the two forms conflict.
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
@@ -20,6 +20,9 @@ dependencies = [
     "python-dotenv>=1.2.3",
 ]
 
+[project.urls]
+Repository = "https://github.com/darylalim/event-planner-agent"
+
 [project.scripts]
 event-planner = "event_planner.cli:main"
 
@@ -29,7 +32,7 @@ web = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
@@ -80,10 +83,11 @@ required-version = "==0.13.7"
 line-length = 100
 
 [tool.ruff.lint]
-# BLE is here so the five `# noqa: BLE001` directives in the source suppress a
+# BLE is here so the `# noqa: BLE001` directives in the source suppress a
 # rule that is actually enabled, and RUF (which carries RUF100) fails the check
 # if one of them ever goes stale.
-select = ["E", "F", "I", "UP", "B", "BLE", "ANN", "RUF"]
+select = ["E", "F", "I", "UP", "B", "BLE", "ANN", "RUF",
+          "S", "DTZ", "PTH", "C4", "RET", "SIM", "PT"]
 # `Any` is deliberate at the deepagents/langgraph boundary: `create_deep_agent`
 # returns an untyped compiled graph and the runtime passed to the namespace
 # factories has no public type. Annotating them honestly means `Any`.
@@ -95,7 +99,12 @@ ignore = ["ANN401"]
 # BaseModel, so `replies: list[AIMessage] = []` is a field that Pydantic
 # deep-copies per instance — not a shared mutable class default. Ruff cannot
 # see through the base class to tell the difference.
-"tests/*" = ["ANN", "RUF012"]
+# S: pytest is built on `assert`, which is S101's whole target.
+"tests/*" = ["ANN", "RUF012", "S"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config"]
 
 # ty is likewise not a dependency — run it with `uvx ty check`. It infers the
 # target version from `requires-python`, so it checks against 3.11, the floor
