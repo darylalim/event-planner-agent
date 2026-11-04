@@ -73,7 +73,7 @@ All in `streamlit_app.py`:
 Switch to `layout="wide"`, then let wrapping do the job of a breakpoint:
 
 ```python
-MAIN_WIDTH = 760    # about today's reading width; confirm in the spike
+MAIN_WIDTH = 760  # about today's reading width; confirm in the spike
 REVIEW_WIDTH = 440
 
 with st.container(horizontal=True, horizontal_alignment="center"):
