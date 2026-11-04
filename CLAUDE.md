@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 An event planning agent built on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview)
-(`deepagents` 0.7.21), which wraps LangGraph. `create_deep_agent` returns a compiled
+(`deepagents` 0.7.32), which wraps LangGraph. `create_deep_agent` returns a compiled
 LangGraph graph, so checkpointers, `interrupt()`, streaming, and Studio all work underneath.
 
 `README.md` is detailed and current — read it for the *why* behind the design, the
@@ -200,7 +200,7 @@ write the prompts ask for is routed.
 only the write half. Under `virtual_mode=False` deepagents documents the backend as letting an
 absolute path bypass `root_dir` entirely and a relative `..` escape it, so the agent's
 `ls`/`read_file`/`glob`/`grep` would reach the repo's own source and anything else on disk. Be
-precise about the hazard: 0.7.21 already **defaults** it to `True`, so deleting the keyword is a
+precise about the hazard: 0.7.32 already **defaults** it to `True`, so deleting the keyword is a
 no-op today. It is passed explicitly because that default is deepagents' to change, and because
 no test asserts `build_backend()` sets it — a release that flipped it would break nothing
 visible here.
@@ -583,12 +583,14 @@ returns 10 so the test cannot pass by the default quietly changing.
 **Store keys are untrusted paths.** `cli._export` treats them as agent-chosen input and
 validates against traversal before writing to `exports/`.
 
-**The step budget is `6 + 4N` for N tool round trips.** LangGraph counts every node as a
-super-step, and the two kinds of middleware node do not run at the same rate: the three
-`before_agent` nodes (Skills, PatchToolCalls, Memory) run **once per invocation**, the two
-`after_model` nodes (HumanInTheLoop, TodoList) run **per model call**. That asymmetry is what
-`6 + 4N` encodes — counting all five per turn predicts 13 steps for one round trip against the
-10 measured. `test_harness.py`'s `_FIXED_OVERHEAD` comment records the correct decomposition.
+**The step budget is `8 + 5N` for N tool round trips.** LangGraph counts every node as a
+super-step, and the middleware nodes do not all run at the same rate: the three `before_agent`
+nodes (Skills, PatchToolCalls, Memory) and the `after_agent` node (ParentNotifier) run **once
+per invocation**, while the `before_model` node (Skills) and the two `after_model` nodes
+(HumanInTheLoop, TodoList) run **per model call**. That asymmetry is what `8 + 5N` encodes.
+deepagents 0.7.32 added the `before_model` and `after_agent` nodes, which took it from `6 + 4N`;
+both are no-ops here but still count. `test_harness.py`'s `_FIXED_OVERHEAD` comment records the
+correct decomposition.
 README's
 "Step budget" has the trace, and explains why the front ends' `DEFAULT_MAX_STEPS = 200`
 *lowers* `create_deep_agent`'s `recursion_limit: 9_999` rather than raising LangGraph's
@@ -607,7 +609,7 @@ a narrowed run once attempted 45 uploads; the full run only escaped because lang
 `get_env_var` is `lru_cache`d. `test_the_suite_never_traces` guards it. README's "Tracing"
 records why traces sit outside tenant isolation.
 
-## deepagents 0.7.21 vs. published docs
+## deepagents 0.7.32 vs. published docs
 
 Three documented behaviours don't match the installed package:
 

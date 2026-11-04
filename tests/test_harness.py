@@ -32,15 +32,17 @@ CTX = PlannerContext(user_id="alice@example.com")
 #: Measured step model, from the live node sequence:
 #:
 #:   3 x before_agent            once per turn   (Skills, PatchToolCalls, Memory)
-#:   model + 2 x after_model     per model call  (HumanInTheLoop, TodoList)
+#:   before_model + model
+#:     + 2 x after_model         per model call  (Skills; HumanInTheLoop, TodoList)
 #:   tools                       per round trip
+#:   after_agent                 once per turn   (_ParentNotifier)
 #:
-#: N tool round trips cost 3 + 3(N+1) + N = 6 + 4N steps. after_model nodes run
-#: on *every* model call, not once per turn, so subtracting them a single time
-#: as fixed overhead — as an earlier version did — misattributes one model
-#: turn's worth of cost.
-_FIXED_OVERHEAD = 6  # 3 before_agent + the final model call's 3 nodes
-_STEPS_PER_ROUND_TRIP = 4
+#: N tool round trips cost 3 + 4(N+1) + N + 1 = 8 + 5N steps, measured at N = 0
+#: to 3 on deepagents 0.7.32. Model-call nodes run on *every* model call, not
+#: once per turn, so subtracting them a single time as fixed overhead — as an
+#: earlier version did — misattributes one model turn's worth of cost.
+_FIXED_OVERHEAD = 8  # 3 before_agent + the final model call's 4 nodes + after_agent
+_STEPS_PER_ROUND_TRIP = 5
 
 
 def _agent(model, store=None):
@@ -92,7 +94,7 @@ def test_hosted_mode_allows_missing_checkpointer(scripted):
 def test_planning_tool_is_bound(scripted):
     """The orchestrator prompt tells the model to plan with `write_todos`.
 
-    create_deep_agent 0.7.21 does not bind it by default, so agent.py adds
+    create_deep_agent 0.7.32 does not bind it by default, so agent.py adds
     TodoListMiddleware explicitly. Without this test that regression is
     invisible until the model hallucinates a call to a missing tool.
     """
@@ -500,10 +502,10 @@ def test_pending_approval_survives_a_process_restart(scripted, tmp_path):
 def test_step_budget_survives_a_long_planning_session(scripted):
     """Every middleware node counts as a LangGraph super-step.
 
-    This harness runs five middleware nodes — three `before_agent` once per
-    invocation, two `after_model` on every model call (see `_FIXED_OVERHEAD`
-    above) — so a tool round trip costs far more than the two steps
-    (model + tools) you would expect — measured live, not guessed.
+    This harness runs seven middleware nodes — three `before_agent` and one
+    `after_agent` once per invocation, one `before_model` and two `after_model`
+    on every model call (see `_FIXED_OVERHEAD` above) — so a tool round trip
+    costs far more than the two steps (model + tools) you would expect.
     `DEFAULT_MAX_STEPS` is a ceiling rather than a
     rescue from LangGraph's default of 25: `create_deep_agent` binds
     `recursion_limit: 9_999` onto the graph, so 25 never applies here.
@@ -532,7 +534,7 @@ def test_step_budget_survives_a_long_planning_session(scripted):
         )
     )
 
-    # This run is exactly one tool round trip, so steps == 6 + 4.
+    # This run is exactly one tool round trip, so steps == 8 + 5.
     assert steps > 2, "step accounting looks wrong; middleware may not be running"
     per_round_trip = max(1, steps - _FIXED_OVERHEAD)
     assert per_round_trip == _STEPS_PER_ROUND_TRIP, (

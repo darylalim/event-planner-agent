@@ -71,10 +71,10 @@ def checkout_warning() -> str | None:
 #: this for operator-supplied paths too.
 STATE_DIR = PROJECT_ROOT / ".state"
 
-#: LangGraph counts every node as a super-step, and this harness runs five
-#: middleware nodes at two different rates: three `before_agent` once per
-#: invocation, two `after_model` on every model call.
-#: Measured against the live model, one tool round trip costs ~4 steps, so a
+#: LangGraph counts every node as a super-step, and this harness runs seven
+#: middleware nodes at two different rates: three `before_agent` and one
+#: `after_agent` once per invocation, one `before_model` and two `after_model`
+#: on every model call. One tool round trip costs 5 steps, so a
 #: planning session that shortlists venues, checks dates, prices catering and
 #: delegates to subagents needs room for dozens of them.
 #:
@@ -593,7 +593,7 @@ def main() -> int:
         default=DEFAULT_MAX_STEPS,
         help=(
             "Graph super-step budget per turn. Each tool round trip costs about "
-            f"4 steps with this middleware stack (default: {DEFAULT_MAX_STEPS})."
+            f"5 steps with this middleware stack (default: {DEFAULT_MAX_STEPS})."
         ),
     )
     args = parser.parse_args()

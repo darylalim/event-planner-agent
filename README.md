@@ -245,20 +245,25 @@ raises rather than handing back an agent whose approval gates don't gate. Pass
 
 ### Step budget
 
-LangGraph counts every node as a super-step, and this harness runs five
-middleware nodes at two different rates — three `before_agent` (Skills,
-PatchToolCalls, Memory) once per invocation, and two `after_model`
-(HumanInTheLoop, TodoList) on every model call. Measured against the
-live model, a single tool round trip costs about **4 steps**, not the 2 you'd
-expect from `model → tools`:
+LangGraph counts every node as a super-step, and this harness runs seven
+middleware nodes at two different rates. Three `before_agent` (Skills,
+PatchToolCalls, Memory) and one `after_agent` (ParentNotifier) run once per
+invocation. One `before_model` (Skills) and two `after_model` (HumanInTheLoop,
+TodoList) run on every model call. A single tool round trip costs **5 steps**,
+not the 2 you'd expect from `model → tools`:
 
 ```
-3 × before_agent → model → 2 × after_model → tools → model → 2 × after_model
-= 10 steps for one tool call and a final answer
+3 × before_agent → before_model → model → 2 × after_model → tools
+  → before_model → model → 2 × after_model → after_agent
+= 13 steps for one tool call and a final answer
 ```
+
+The two extra node types arrived with deepagents 0.7.32. Neither does anything
+here: `before_model` pins skills only if a caller names them, and `after_agent`
+reports only to a parent that started the run with `start_async_task`.
 
 LangGraph's default `recursion_limit` of 25 would strand a session after
-roughly five tool calls — but it never applies here, because
+roughly three tool calls — but it never applies here, because
 `create_deep_agent` binds `recursion_limit: 9_999` onto the compiled graph. So
 the 200 both front ends pass is a deliberate cap on a runaway session, not a
 rescue from 25: removing it uncaps to 9999 rather than restoring the default.
@@ -602,7 +607,7 @@ and not by the suite. The invariant that makes the isolation safe — that the
 panel reads no graph state while rendering — is pinned by
 `test_the_panel_reads_no_graph_state_while_rendering`.
 
-## Notes on `deepagents` 0.7.21
+## Notes on `deepagents` 0.7.32
 
 Three places where the published guidance and the installed package disagree.
 All were found by inspecting the package, and all are covered by tests:

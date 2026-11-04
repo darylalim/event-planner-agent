@@ -304,7 +304,7 @@ def _render_tool(message: Any, *, gated: bool = True) -> None:
     """
     name = getattr(message, "name", None) or "tool"
     key = _panel_key(message) if gated else None
-    gate = {"key": key, "on_change": "rerun"} if key else {}
+    gate: dict[str, Any] = {"key": key, "on_change": "rerun"} if key else {}
 
     # `type="compact"` because a real thread renders 25 of these against 11
     # assistant messages, and default-weight boxes bury the prose between
