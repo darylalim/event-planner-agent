@@ -18,3 +18,24 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+
+# Secrets — any local env file, matching protect_files.sh
+.env.*
+!.env.example
+
+# A database placed outside .state/ with --db or EVENT_PLANNER_DB
+*.sqlite
+*.sqlite-*
+
+# Claude Code's personal settings
+.claude/settings.local.json
+
+# LangGraph dev server state
+.langgraph_api/
+
+# Build output
+dist/
+build/
+
+# macOS
+.DS_Store
