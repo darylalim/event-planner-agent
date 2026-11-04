@@ -30,7 +30,7 @@ Three things worth knowing if you change this:
 * `interrupt_on` silently does nothing without a checkpointer. The build below
   will refuse to hand back an un-gated agent rather than let that pass quietly.
 * `TodoListMiddleware` is added explicitly. Despite what the Deep Agents docs
-  say, `create_deep_agent` in 0.7.21 does not bind `write_todos` on its own —
+  say, `create_deep_agent` in 0.7.32 does not bind `write_todos` on its own —
   verified by inspecting the tools actually bound to the model. The
   orchestrator prompt tells the agent to plan with `write_todos`, so without
   this the model would be instructed to call a tool that does not exist.
@@ -300,11 +300,11 @@ def build_agent(
         tools=ORCHESTRATOR_TOOLS,
         system_prompt=ORCHESTRATOR_PROMPT,
         subagents=subagents,
-        # TodoListMiddleware: not included by create_deep_agent in 0.7.21 — see
+        # TodoListMiddleware: not included by create_deep_agent in 0.7.32 — see
         # module docstring.
         # HumanInTheLoopMiddleware: deepagents builds one from `interrupt_on`
         # but passes no `edit_notice`, and merges custom middleware by name, so
-        # this replaces it in place — same position, same 6 + 4N step budget.
+        # this replaces it in place — same position, same 8 + 5N step budget.
         # `interrupt_on` below stays, so the gate does not depend on the merge.
         # Cast: both are generic over context, and the checker treats that
         # parameter as invariant against our PlannerContext.

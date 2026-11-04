@@ -35,8 +35,8 @@ uv itself is pinned too, by `[tool.uv] required-version` in `pyproject.toml`.
 `astral-sh/setup-uv` reads that key, so one line pins the CI runner and your
 checkout alike — and a mismatch is a hard error naming the version rather than a
 silent split between what your machine checks and what CI does. If `uv sync`
-greets you with *"Required uv version `==0.12.22` does not match the running
-version"*, that is this, working as intended — `uv self update 0.12.22` puts you
+greets you with *"Required uv version `==0.13.7` does not match the running
+version"*, that is this, working as intended — `uv self update 0.13.7` puts you
 back in step. It gates the project-aware commands only; `uvx ruff` and
 `uv self update` are deliberately untouched, the latter so the way out is never
 the thing being blocked.
@@ -79,10 +79,16 @@ Both front ends read the same `.env` and share `.state/planner.sqlite` unless
 `EVENT_PLANNER_DB` points elsewhere, so a plan started in the terminal resumes
 in the browser on the same thread.
 
+## Contributing
+
+`main` requires a pull request and passing CI, so every change goes through a
+branch, including docs edits and version bumps. The `main requires CI` ruleset
+makes the six CI checks required and blocks force pushes and deletion of `main`.
+
 ## Releases
 
-Bump `version` in `pyproject.toml`, run `uv lock`, and push to main.
-`.github/workflows/release.yml` waits for CI to go green on that commit, then
+Bump `version` in `pyproject.toml`, run `uv lock`, and merge that through a pull
+request. `.github/workflows/release.yml` waits for CI to go green on that commit, then
 tags `v<version>` and publishes a GitHub release with generated notes. Nothing
 else is a trigger — not a tag you push, not an edit to `pyproject.toml` that
 leaves the version alone.
@@ -245,20 +251,25 @@ raises rather than handing back an agent whose approval gates don't gate. Pass
 
 ### Step budget
 
-LangGraph counts every node as a super-step, and this harness runs five
-middleware nodes at two different rates — three `before_agent` (Skills,
-PatchToolCalls, Memory) once per invocation, and two `after_model`
-(HumanInTheLoop, TodoList) on every model call. Measured against the
-live model, a single tool round trip costs about **4 steps**, not the 2 you'd
-expect from `model → tools`:
+LangGraph counts every node as a super-step, and this harness runs seven
+middleware nodes at two different rates. Three `before_agent` (Skills,
+PatchToolCalls, Memory) and one `after_agent` (ParentNotifier) run once per
+invocation. One `before_model` (Skills) and two `after_model` (HumanInTheLoop,
+TodoList) run on every model call. A single tool round trip costs **5 steps**,
+not the 2 you'd expect from `model → tools`:
 
 ```
-3 × before_agent → model → 2 × after_model → tools → model → 2 × after_model
-= 10 steps for one tool call and a final answer
+3 × before_agent → before_model → model → 2 × after_model → tools
+  → before_model → model → 2 × after_model → after_agent
+= 13 steps for one tool call and a final answer
 ```
+
+The two extra node types arrived with deepagents 0.7.32. Neither does anything
+here: `before_model` pins skills only if a caller names them, and `after_agent`
+reports only to a parent that started the run with `start_async_task`.
 
 LangGraph's default `recursion_limit` of 25 would strand a session after
-roughly five tool calls — but it never applies here, because
+roughly three tool calls — but it never applies here, because
 `create_deep_agent` binds `recursion_limit: 9_999` onto the compiled graph. So
 the 200 both front ends pass is a deliberate cap on a runaway session, not a
 rescue from 25: removing it uncaps to 9999 rather than restoring the default.
@@ -499,6 +510,27 @@ second — the second's worst case over the ceiling. Expect cost, wall clock and
 the verdict's margins to vary from run to run, and re-measure before quoting a
 figure to anyone.
 
+After the 2026-11-04 dependency upgrade (deepagents 0.7.32, langchain 1.4.8,
+langchain-anthropic 1.7.10, anthropic 2.4.0), one brief and one `edit` check:
+
+| Role | Calls | Tokens in (cached) / out | Cost |
+| --- | --- | --- | --- |
+| orchestrator — Opus 5.5 | 14 | 338,377 (313,515) / 11,011 | $0.38 |
+| budget-analyst — Sonnet 5.5 | 11 | 429,865 (370,093) / 31,453 | $0.51 |
+| venue-researcher — Sonnet 5.5 | 6 | 61,219 (44,604) / 6,220 | $0.10 |
+| vendor-researcher — Sonnet 5.5 | 4 | 39,858 (23,702) / 6,818 | $0.11 |
+| **Total** | **35** | | **$1.10**, 432s |
+
+All three subagents were delegated and no role hit `max_tokens`. The cost is
+just above the earlier $0.65-$0.82, and the budget analyst is most of the
+difference: 42 `estimate_budget` calls and five `edit_file` calls, two of them
+refused as parallel writes to one path. deepagents 0.7.21 has that refusal too,
+and a single run can't separate the upgrade from ordinary variation.
+
+The `edit` check cost $0.07. The resumed turn carried one thinking block and was
+accepted, the model treated 45 as settled, and it flagged that the $12,000 total
+may have been set for 60 guests.
+
 ### The approval gate
 
 All three decisions were run from the CLI on separate threads (~$0.25 total),
@@ -602,7 +634,7 @@ and not by the suite. The invariant that makes the isolation safe — that the
 panel reads no graph state while rendering — is pinned by
 `test_the_panel_reads_no_graph_state_while_rendering`.
 
-## Notes on `deepagents` 0.7.21
+## Notes on `deepagents` 0.7.32
 
 Three places where the published guidance and the installed package disagree.
 All were found by inspecting the package, and all are covered by tests:

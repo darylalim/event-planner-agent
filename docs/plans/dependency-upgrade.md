@@ -1,6 +1,6 @@
 # Plan: upgrade dependencies to latest
 
-Status: not started. Written 2026-11-04 for a new session to carry out.
+Status: done 2026-11-04, pending merge. Written 2026-11-04 for a new session to carry out.
 Do this **before** `budget-analyst-effort.md`, so that experiment measures the
 dependencies the project will actually ship.
 
@@ -31,18 +31,13 @@ Other major bumps, all transitive: `pillow` 13, `python-dateutil` 4, `multidict`
 
 Added: `opentelemetry-api`. Removed: `httptools`, `six`, `toml`.
 
-## Prerequisite: fix the uv version mismatch
+## Prerequisite: the uv version mismatch
 
-`pyproject.toml` requires uv `==0.12.22`, but this machine has 0.13.4, so every
-`uv run`, `uv sync` and `uv lock` fails. That includes `test_gate.sh`, which
-would then report a failure after every edit under `src/` or `tests/`.
-
-```bash
-uv self update 0.12.22
-```
-
-This is the remedy CLAUDE.md gives. It changes the operator's global uv, so
-confirm with them first. Moving the pin to 0.13.x is out of scope.
+`pyproject.toml` required uv `==0.12.22`, but this machine had 0.13.4, so every
+`uv run`, `uv sync` and `uv lock` failed. The operator chose on 2026-11-04 to move
+the pin to 0.13.7 and update the machine to match, rather than downgrade a global
+tool for one repo. `uv.lock` came out byte-identical under 0.12.22, 0.13.4 and
+0.13.7.
 
 ## Steps
 
@@ -246,5 +241,5 @@ confirm with them first. Moving the pin to 0.13.x is out of scope.
 
 ## Out of scope
 
-Bumping `required-version`, the ruff and ty pins, or the CI action SHAs. Adding
+Bumping the ruff and ty pins or the CI action SHAs. Adding
 `exclude-newer`, which would hold back the newest releases this plan is asking for.

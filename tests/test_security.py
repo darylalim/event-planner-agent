@@ -637,7 +637,7 @@ def test_a_workspace_without_skills_is_refused(tmp_path, monkeypatch):
         build_backend()
 
 
-#: deepagents' complete public backend surface (the same in 0.7.9 and 0.7.21),
+#: deepagents' complete public backend surface (the same in 0.7.9, 0.7.21 and 0.7.32),
 #: recorded rather than derived. Deriving it by filtering for the mutator names is circular — the
 #: filter cannot contain a name nobody has added yet — and the first version of
 #: this guard did exactly that: subclassing `FilesystemBackend` with `move` and
@@ -712,7 +712,7 @@ def test_the_read_only_root_refuses_every_mutator(tmp_path):
     assert all(r.error for r in asyncio.run(backend.aupload_files([("/skills/SKILL.md", b"x")])))
 
     assert target.read_text(encoding="utf-8") == "original", "a refusal still wrote"
-    assert MUTATORS_COVERED == set(ReadOnlyFilesystemBackend.MUTATORS)
+    assert set(ReadOnlyFilesystemBackend.MUTATORS) == MUTATORS_COVERED
 
 
 #: The sync names the class overrides. Kept beside the behavioural test so the

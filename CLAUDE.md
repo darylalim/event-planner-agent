@@ -3,12 +3,17 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 An event planning agent built on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview)
-(`deepagents` 0.7.21), which wraps LangGraph. `create_deep_agent` returns a compiled
+(`deepagents` 0.7.32), which wraps LangGraph. `create_deep_agent` returns a compiled
 LangGraph graph, so checkpointers, `interrupt()`, streaming, and Studio all work underneath.
 
 `README.md` is detailed and current — read it for the *why* behind the design, the
 storage/tenant-isolation rationale, and the recorded live-run results. This file covers
 what you need to *change code* safely.
+
+**`main` requires a pull request and passing CI.** Ruleset `main requires CI` makes the six CI
+checks required and blocks force pushes and deletion, with no bypass actors, so every change,
+including docs and version bumps, goes through a branch and a pull request. It has no separate
+pull request rule: a direct push fails because its commit has no passing checks yet.
 
 ## Commands
 
@@ -17,7 +22,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # uv itself is pinned: pyproject's
                                            # [tool.uv] required-version gates
                                            # every `uv` line below (not `uvx`).
-                                           # Mismatch -> `uv self update 0.12.22`
+                                           # Mismatch -> `uv self update 0.13.7`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
 uv run pytest                              # 269 tests, fully offline
@@ -115,10 +120,11 @@ Ruff is configured in `pyproject.toml` but is **not** a dependency — run it wi
 `uvx ruff check .`. The rule set is chosen so the `# noqa` codes in the source
 (`BLE001` on the seven deliberate blind excepts — three under `src/`, four in
 `streamlit_app.py`, two of them the guards on `graph.get_state`) suppress rules that are
-actually enabled; `RUF100` fails the check if one goes stale. `ANN401` is ignored because `Any` is honest at the deepagents/langgraph
-boundary, and `tests/*` ignores `ANN`/`RUF012`
+actually enabled; `RUF100` fails the check if one goes stale. `S`, `DTZ`, `PTH`, `C4`, `RET`,
+`SIM` and `PT` are on as well; `T20` and `ERA` are deliberately not. `ANN401` is ignored because
+`Any` is honest at the deepagents/langgraph boundary, and `tests/*` ignores `ANN`/`RUF012`
 (the fake models are Pydantic subclasses, so their list defaults are fields, not shared
-state). Formatting **is** enforced — run `uvx ruff format` before committing; CI runs
+state) and `S` (pytest is built on `assert`, which is what `S101` flags). Formatting **is** enforced — run `uvx ruff format` before committing; CI runs
 `uvx ruff format --check .`. It was adopted after the fact, so the reformat that made
 the tree clean collapsed some hand-wrapped expressions; `line-length` drives the
 formatter as well as E501, so raising it widens what gets joined onto one line.
@@ -200,7 +206,7 @@ write the prompts ask for is routed.
 only the write half. Under `virtual_mode=False` deepagents documents the backend as letting an
 absolute path bypass `root_dir` entirely and a relative `..` escape it, so the agent's
 `ls`/`read_file`/`glob`/`grep` would reach the repo's own source and anything else on disk. Be
-precise about the hazard: 0.7.21 already **defaults** it to `True`, so deleting the keyword is a
+precise about the hazard: 0.7.32 already **defaults** it to `True`, so deleting the keyword is a
 no-op today. It is passed explicitly because that default is deepagents' to change, and because
 no test asserts `build_backend()` sets it — a release that flipped it would break nothing
 visible here.
@@ -583,12 +589,14 @@ returns 10 so the test cannot pass by the default quietly changing.
 **Store keys are untrusted paths.** `cli._export` treats them as agent-chosen input and
 validates against traversal before writing to `exports/`.
 
-**The step budget is `6 + 4N` for N tool round trips.** LangGraph counts every node as a
-super-step, and the two kinds of middleware node do not run at the same rate: the three
-`before_agent` nodes (Skills, PatchToolCalls, Memory) run **once per invocation**, the two
-`after_model` nodes (HumanInTheLoop, TodoList) run **per model call**. That asymmetry is what
-`6 + 4N` encodes — counting all five per turn predicts 13 steps for one round trip against the
-10 measured. `test_harness.py`'s `_FIXED_OVERHEAD` comment records the correct decomposition.
+**The step budget is `8 + 5N` for N tool round trips.** LangGraph counts every node as a
+super-step, and the middleware nodes do not all run at the same rate: the three `before_agent`
+nodes (Skills, PatchToolCalls, Memory) and the `after_agent` node (ParentNotifier) run **once
+per invocation**, while the `before_model` node (Skills) and the two `after_model` nodes
+(HumanInTheLoop, TodoList) run **per model call**. That asymmetry is what `8 + 5N` encodes.
+deepagents 0.7.32 added the `before_model` and `after_agent` nodes, which took it from `6 + 4N`;
+both are no-ops here but still count. `test_harness.py`'s `_FIXED_OVERHEAD` comment records the
+correct decomposition.
 README's
 "Step budget" has the trace, and explains why the front ends' `DEFAULT_MAX_STEPS = 200`
 *lowers* `create_deep_agent`'s `recursion_limit: 9_999` rather than raising LangGraph's
@@ -607,7 +615,7 @@ a narrowed run once attempted 45 uploads; the full run only escaped because lang
 `get_env_var` is `lru_cache`d. `test_the_suite_never_traces` guards it. README's "Tracing"
 records why traces sit outside tenant isolation.
 
-## deepagents 0.7.21 vs. published docs
+## deepagents 0.7.32 vs. published docs
 
 Three documented behaviours don't match the installed package:
 
@@ -650,8 +658,8 @@ floor keeps it from going stale.
 Neither block exposes `.open`, which reads like "a test cannot open a panel" and is wrong —
 that was claimed here and in README once, and it hid a real coverage gap. A *gated* expander
 is a widget, so it registers its key in session state: `at.session_state[key] = True`
-followed by `at.run()` opens it. `_panel_keys()` collects those keys from
-`at.session_state.keys()` — 1.65's proxy no longer forwards `filtered_state`.
+followed by `at.run()` opens it. `_panel_keys()` collects those keys by iterating
+`at.session_state` — 1.65's proxy no longer forwards `filtered_state`.
 
 Stub tools (`search_venues`, `check_availability`, `search_vendors`, `hold_venue`,
 `send_invitations`) are deterministic on purpose so a behaviour regression is visible rather

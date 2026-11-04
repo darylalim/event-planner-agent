@@ -484,7 +484,7 @@ def _panel_keys(at):
     A gated expander is a stateful widget, so it registers its key — which is
     also how a test opens one, since there is no `.open` setter on the block.
     """
-    return sorted(k for k in at.session_state.keys() if k.startswith("tool-"))
+    return sorted(k for k in at.session_state if k.startswith("tool-"))
 
 
 def test_an_opened_panel_renders_its_body(page):
