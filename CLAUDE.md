@@ -10,6 +10,11 @@ LangGraph graph, so checkpointers, `interrupt()`, streaming, and Studio all work
 storage/tenant-isolation rationale, and the recorded live-run results. This file covers
 what you need to *change code* safely.
 
+**`main` requires a pull request and passing CI.** Ruleset `main requires CI` makes the six CI
+checks required and blocks force pushes and deletion, with no bypass actors, so every change,
+including docs and version bumps, goes through a branch and a pull request. It has no separate
+pull request rule: a direct push fails because its commit has no passing checks yet.
+
 ## Commands
 
 ```bash
@@ -115,10 +120,11 @@ Ruff is configured in `pyproject.toml` but is **not** a dependency — run it wi
 `uvx ruff check .`. The rule set is chosen so the `# noqa` codes in the source
 (`BLE001` on the seven deliberate blind excepts — three under `src/`, four in
 `streamlit_app.py`, two of them the guards on `graph.get_state`) suppress rules that are
-actually enabled; `RUF100` fails the check if one goes stale. `ANN401` is ignored because `Any` is honest at the deepagents/langgraph
-boundary, and `tests/*` ignores `ANN`/`RUF012`
+actually enabled; `RUF100` fails the check if one goes stale. `S`, `DTZ`, `PTH`, `C4`, `RET`,
+`SIM` and `PT` are on as well; `T20` and `ERA` are deliberately not. `ANN401` is ignored because
+`Any` is honest at the deepagents/langgraph boundary, and `tests/*` ignores `ANN`/`RUF012`
 (the fake models are Pydantic subclasses, so their list defaults are fields, not shared
-state). Formatting **is** enforced — run `uvx ruff format` before committing; CI runs
+state) and `S` (pytest is built on `assert`, which is what `S101` flags). Formatting **is** enforced — run `uvx ruff format` before committing; CI runs
 `uvx ruff format --check .`. It was adopted after the fact, so the reformat that made
 the tree clean collapsed some hand-wrapped expressions; `line-length` drives the
 formatter as well as E501, so raising it widens what gets joined onto one line.
@@ -652,8 +658,8 @@ floor keeps it from going stale.
 Neither block exposes `.open`, which reads like "a test cannot open a panel" and is wrong —
 that was claimed here and in README once, and it hid a real coverage gap. A *gated* expander
 is a widget, so it registers its key in session state: `at.session_state[key] = True`
-followed by `at.run()` opens it. `_panel_keys()` collects those keys from
-`at.session_state.keys()` — 1.65's proxy no longer forwards `filtered_state`.
+followed by `at.run()` opens it. `_panel_keys()` collects those keys by iterating
+`at.session_state` — 1.65's proxy no longer forwards `filtered_state`.
 
 Stub tools (`search_venues`, `check_availability`, `search_vendors`, `hold_venue`,
 `send_invitations`) are deterministic on purpose so a behaviour regression is visible rather

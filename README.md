@@ -79,10 +79,16 @@ Both front ends read the same `.env` and share `.state/planner.sqlite` unless
 `EVENT_PLANNER_DB` points elsewhere, so a plan started in the terminal resumes
 in the browser on the same thread.
 
+## Contributing
+
+`main` requires a pull request and passing CI, so every change goes through a
+branch, including docs edits and version bumps. The `main requires CI` ruleset
+makes the six CI checks required and blocks force pushes and deletion of `main`.
+
 ## Releases
 
-Bump `version` in `pyproject.toml`, run `uv lock`, and push to main.
-`.github/workflows/release.yml` waits for CI to go green on that commit, then
+Bump `version` in `pyproject.toml`, run `uv lock`, and merge that through a pull
+request. `.github/workflows/release.yml` waits for CI to go green on that commit, then
 tags `v<version>` and publishes a GitHub release with generated notes. Nothing
 else is a trigger — not a tag you push, not an edit to `pyproject.toml` that
 leaves the version alone.
@@ -503,6 +509,27 @@ realistic and $44,119 worst case in the first, $43,400 and $46,900 in the
 second — the second's worst case over the ceiling. Expect cost, wall clock and
 the verdict's margins to vary from run to run, and re-measure before quoting a
 figure to anyone.
+
+After the 2026-11-04 dependency upgrade (deepagents 0.7.32, langchain 1.4.8,
+langchain-anthropic 1.7.10, anthropic 2.4.0), one brief and one `edit` check:
+
+| Role | Calls | Tokens in (cached) / out | Cost |
+| --- | --- | --- | --- |
+| orchestrator — Opus 5.5 | 14 | 338,377 (313,515) / 11,011 | $0.38 |
+| budget-analyst — Sonnet 5.5 | 11 | 429,865 (370,093) / 31,453 | $0.51 |
+| venue-researcher — Sonnet 5.5 | 6 | 61,219 (44,604) / 6,220 | $0.10 |
+| vendor-researcher — Sonnet 5.5 | 4 | 39,858 (23,702) / 6,818 | $0.11 |
+| **Total** | **35** | | **$1.10**, 432s |
+
+All three subagents were delegated and no role hit `max_tokens`. The cost is
+just above the earlier $0.65-$0.82, and the budget analyst is most of the
+difference: 42 `estimate_budget` calls and five `edit_file` calls, two of them
+refused as parallel writes to one path. deepagents 0.7.21 has that refusal too,
+and a single run can't separate the upgrade from ordinary variation.
+
+The `edit` check cost $0.07. The resumed turn carried one thinking block and was
+accepted, the model treated 45 as settled, and it flagged that the $12,000 total
+may have been set for 60 guests.
 
 ### The approval gate
 

@@ -14,7 +14,7 @@ of the plan.
 | Order | Plan | Who acts | Estimated live spend | Needs first | Status |
 | --- | --- | --- | --- | --- | --- |
 | 1 | [required-ci-checks.md](required-ci-checks.md) | Operator | None | Nothing | Done |
-| 2 | [dependency-upgrade.md](dependency-upgrade.md) | Session | $0.70-$1.05 | 1 | Not started |
+| 2 | [dependency-upgrade.md](dependency-upgrade.md) | Session | $0.70-$1.05 | 1 | Done |
 | 3 | [harness-gaps.md](harness-gaps.md) | Session | None | 2 | Not started |
 | 4 | [agent-evaluation.md](agent-evaluation.md) | Session | $2-3 smoke, $15-25 full | 2 | Not started |
 | 5 | [real-invitations.md](real-invitations.md) | Session, after operator decisions | Provider costs; live sends need go-ahead | 2, 3, ideally 4 | Not started |
