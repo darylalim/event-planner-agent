@@ -71,6 +71,7 @@ database, and a delete nobody asked for should not ride on opening a page.
        matched: int
        deleted: int
 
+
    def purge_artifacts(
        store: BaseStore, *, older_than: timedelta, now: datetime, delete: bool = False
    ) -> PurgeReport: ...
