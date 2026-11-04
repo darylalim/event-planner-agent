@@ -263,16 +263,18 @@ def build_agent(
             which is what lets the tests hand in a scripted fake.
         checkpointer: Required for human-in-the-loop approval and for
             conversation state to survive across `invoke` calls.
-        store: Backing store for `/memories/`. Without one, memory does not
-            persist across threads.
+        store: Backing store for `/memories/`, `/events/` and `/artifacts/`.
+            Required: `/memories/AGENTS.md` loads through it on every invoke.
         hosted: Set only when a host (LangGraph Platform, `langgraph dev`)
-            injects its own checkpointer and store. Suppresses the guard below.
+            injects its own checkpointer and store. Suppresses both guards
+            below.
 
     Returns a compiled LangGraph graph.
 
     Raises:
         ValueError: If approval-gated tools are configured without a
-            checkpointer, which would silently disable approval.
+            checkpointer, which would silently disable approval, or if no
+            store is supplied, which would fail the first invoke.
     """
     if INTERRUPT_ON and checkpointer is None and not hosted:
         msg = (
@@ -280,6 +282,14 @@ def build_agent(
             "approval gates would be silently skipped and hold_venue / "
             "send_invitations would execute unreviewed. Pass a checkpointer "
             "(e.g. InMemorySaver()), or hosted=True when the host supplies one."
+        )
+        raise ValueError(msg)
+
+    if store is None and not hosted:
+        msg = (
+            "no store was supplied, so the first invoke would fail while loading "
+            "/memories/AGENTS.md. Pass a store (e.g. InMemoryStore()), or hosted=True "
+            "when the host supplies one."
         )
         raise ValueError(msg)
 

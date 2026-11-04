@@ -1,6 +1,6 @@
 # Plan: close two documented harness gaps
 
-Status: not started. Written 2026-11-04 for a new session to carry out.
+Status: done 2026-11-04, pending merge. Written 2026-11-04 for a new session to carry out.
 Do `dependency-upgrade.md` first, for its uv version fix. No live model run is needed.
 
 ## Goal

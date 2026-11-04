@@ -15,7 +15,7 @@ of the plan.
 | --- | --- | --- | --- | --- | --- |
 | 1 | [required-ci-checks.md](required-ci-checks.md) | Operator | None | Nothing | Done |
 | 2 | [dependency-upgrade.md](dependency-upgrade.md) | Session | $0.70-$1.05 | 1 | Done |
-| 3 | [harness-gaps.md](harness-gaps.md) | Session | None | 2 | Not started |
+| 3 | [harness-gaps.md](harness-gaps.md) | Session | None | 2 | Done |
 | 4 | [agent-evaluation.md](agent-evaluation.md) | Session | $2-3 smoke, $15-25 full | 2 | Not started |
 | 5 | [real-invitations.md](real-invitations.md) | Session, after operator decisions | Provider costs; live sends need go-ahead | 2, 3, ideally 4 | Not started |
 | 6 | [budget-analyst-effort.md](budget-analyst-effort.md) | Session | $3.90-$6, stops at $8 | 2, ideally 4 | Not started |

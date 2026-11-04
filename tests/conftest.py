@@ -54,6 +54,12 @@ class ScriptedModel(GenericFakeChatModel):
 BACKTICKED = re.compile(r"`([a-z_][a-z0-9_]*)`")
 
 
+#: Absolute virtual paths: a leading slash, a lower-case segment, a further
+#: slash. The lookbehind keeps the slashes inside prose ("and/or", "$40/head/day")
+#: and URLs from matching, since there the slash follows a word character.
+VIRTUAL_PATH = re.compile(r"(?<![\w./:-])/[a-z][a-z0-9_-]*/[^\s`\"'),;]*")
+
+
 def agent_bindings() -> list[tuple[str, str, set[str]]]:
     """(name, system prompt, callable tool names) for the orchestrator and each
     subagent.

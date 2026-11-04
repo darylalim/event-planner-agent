@@ -1,6 +1,6 @@
 # Plan: upgrade dependencies to latest
 
-Status: done 2026-11-04, pending merge. Written 2026-11-04 for a new session to carry out.
+Status: done 2026-11-04, merged in #3. Written 2026-11-04 for a new session to carry out.
 Do this **before** `budget-analyst-effort.md`, so that experiment measures the
 dependencies the project will actually ship.
 

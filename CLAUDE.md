@@ -25,7 +25,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.13.7`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 269 tests, fully offline
+uv run pytest                              # 271 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -224,9 +224,11 @@ Changing behaviour usually touches all three, and they drift silently:
 - `prompts.py` names tools (`search_venues`, `estimate_budget`) and file paths
   (`/events/<event-slug>/brief.md`) as literal strings. Renaming a tool or restructuring
   paths without updating prompts produces an agent instructed to call something that
-  doesn't exist. Nothing catches this at import time — the three drift tests below do,
-  at test time. Path drift is still uncovered: nothing checks that `/events/...` in a
-  prompt matches what `build_backend()` routes.
+  doesn't exist. Nothing catches this at import time — the four drift tests below do,
+  at test time. `test_every_prompt_path_is_routed` is the one for paths: it reads the
+  prefixes from `build_backend().routes`, so a renamed route reds rather than leaving a
+  prompt aimed at the shared root, and it checks each `/skills/` path against `WORKSPACE`.
+  Like the tool checks, its `permitted` allowlist starts empty.
 - `tools/` signatures are the contract prompts are written against. Keep them stable when
   swapping stubs for real backends.
 - `subagents.py` — subagents do **not** inherit the orchestrator's skills. Each lists its
@@ -244,15 +246,15 @@ working-looking code.
 **`interrupt_on` is a no-op without a checkpointer.** `build_agent` raises rather than
 returning an agent whose approval gates don't gate. Only `hosted=True` suppresses this.
 
-**A `store` is required too, and — alone in this section — no test enforces it.** With a
-checkpointer alone `build_agent` constructs fine and then dies on the first invoke:
+**A `store` is required too, so `build_agent` refuses to build without one.** Unguarded, a
+checkpointer alone constructs fine and then dies on the first invoke:
 `AttributeError: 'NoneType' object has no attribute 'get'`, from `store.get(namespace, path)`
 inside `MemoryMiddleware.before_agent`, because `memory=["/memories/AGENTS.md"]` downloads
-through `StoreBackend`. Every real call site passes one (`cli.py`, `streamlit_app.py`, and
-`tests/test_harness.py`'s `_agent`, which defaults to `InMemoryStore()`), so a new entry point,
-repro script, or test must too — nothing in that traceback names `build_agent` or its `store=`
-parameter. The guard belongs beside the checkpointer's in `build_agent`; until it is written,
-this bullet is what stands in for it.
+through `StoreBackend`. Nothing in that traceback names `build_agent` or its `store=`
+parameter, which is why the guard sits beside the checkpointer's, and only `hosted=True`
+suppresses it. It must stay second: `test_missing_checkpointer_is_rejected` passes neither
+argument and expects the approval refusal. `test_missing_store_is_rejected` holds it, and
+`test_hosted_mode_allows_missing_persistence` holds both exemptions.
 
 **Every role names its model and effort; nothing inherits, and effort is never left unset.**
 `build_agent` gives each subagent `SUBAGENT_MODELS[name].build()` at build time. A spec with

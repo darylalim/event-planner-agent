@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from conftest import BACKTICKED, agent_bindings, bound_tool_names
+from conftest import BACKTICKED, VIRTUAL_PATH, agent_bindings, bound_tool_names
 from deepagents._models import get_model_identifier
 from deepagents.middleware.summarization import compute_summarization_defaults
 from langchain_core.language_models import BaseChatModel
@@ -19,7 +19,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
-from event_planner.agent import WORKSPACE, build_agent
+from event_planner import prompts
+from event_planner.agent import WORKSPACE, build_agent, build_backend
 from event_planner.cli import DEFAULT_MAX_STEPS
 from event_planner.context import PlannerContext
 from event_planner.models import MAX_OUTPUT_TOKENS, ORCHESTRATOR_MODEL, ModelChoice
@@ -86,8 +87,22 @@ def test_missing_checkpointer_is_rejected(scripted):
         build_agent(model=scripted())
 
 
-def test_hosted_mode_allows_missing_checkpointer(scripted):
-    """`langgraph dev` injects its own persistence, so the guard must be opt-out."""
+def test_missing_store_is_rejected(scripted):
+    """Without a store the build succeeds and the first invoke dies.
+
+    The `AttributeError` comes from inside `MemoryMiddleware.before_agent` and
+    names neither `build_agent` nor `store=`, so the refusal belongs here.
+    """
+    with pytest.raises(ValueError, match="no store"):
+        build_agent(model=scripted(), checkpointer=InMemorySaver())
+
+
+def test_hosted_mode_allows_missing_persistence(scripted):
+    """`langgraph dev` injects its own persistence, so both guards must be opt-out.
+
+    Neither argument is passed, so this reds if either guard loses its `hosted`
+    exemption.
+    """
     assert build_agent(model=scripted(), hosted=True) is not None
 
 
@@ -759,6 +774,55 @@ def test_no_prompt_instructs_a_tool_its_agent_cannot_call():
         f"prompts instruct tools their agent cannot call: {sorted(misrouted)}. "
         f"Either bind the tool to that agent, stop naming it in the prompt, or "
         f"add the pair to `permitted` above if it is prose about another agent."
+    )
+
+
+def _paths_shown_to_the_model() -> set[str]:
+    """Every absolute virtual path in the prompts, subagent specs and skills.
+
+    `prompts.py` is read by constant rather than through `agent_bindings`, so
+    `EDIT_NOTICE` and any prompt added later are covered without an edit here.
+    """
+    shown = [value for name, value in vars(prompts).items() if name.isupper()]
+    for spec in SUBAGENTS:
+        shown += [str(spec["description"]), str(spec["system_prompt"]), *spec.get("skills", [])]
+    shown += [
+        p.read_text(encoding="utf-8") for p in sorted((WORKSPACE / "skills").glob("*/SKILL.md"))
+    ]
+    return {path for text in shown for path in VIRTUAL_PATH.findall(text)}
+
+
+def test_every_prompt_path_is_routed():
+    """A path the model is told to use must be one the backend can honour.
+
+    The prefixes come from the real backend, so renaming a route reds here
+    rather than leaving a prompt aimed at the shared root, which refuses the
+    write only at runtime, where the offline suite cannot see it. The read-only
+    default is not in `routes`, which is why `/skills/` is handled apart:
+    those paths are read from `WORKSPACE`, so each must name a real directory.
+    """
+    #: Paths that are deliberately unrouted, each with the sentence justifying it.
+    permitted: set[str] = set()
+
+    paths = _paths_shown_to_the_model()
+    routed = tuple(build_backend().routes)
+
+    # A broken pattern would otherwise pass with nothing to check.
+    for prefix in ("/events/", "/memories/", "/skills/"):
+        assert any(path.startswith(prefix) for path in paths), f"no {prefix} path was collected"
+
+    skills = {path for path in paths if path.startswith("/skills/")}
+    unrouted = {path for path in paths - skills if not path.startswith(routed)}
+    missing = {
+        path
+        for path in skills
+        if not (WORKSPACE / "/".join(path.split("/")[1:3])).is_dir()  # /skills/<name>
+    }
+
+    assert not (unrouted | missing) - permitted, (
+        f"unrouted paths: {sorted(unrouted)}; skills with no directory: {sorted(missing)}. "
+        f"Fix the prompt or the route in build_backend(), or add the path to "
+        f"`permitted` above with the reason it is deliberate."
     )
 
 
