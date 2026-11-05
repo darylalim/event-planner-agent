@@ -531,6 +531,28 @@ The `edit` check cost $0.07. The resumed turn carried one thinking block and was
 accepted, the model treated 45 as settled, and it flagged that the $12,000 total
 may have been set for 60 guests.
 
+On 2026-11-05 a test of `budget-analyst` at `medium` instead of `high`, with effort
+the only difference: seven briefs, $5.37. One `high` run was discarded and replaced
+because the orchestrator did the costing itself, so each arm has three valid runs.
+
+| Effort | Analyst calls | Analyst output tokens | Analyst cost | Mean analyst cost | Mean brief | Passed every check |
+| --- | --- | --- | --- | --- | --- | --- |
+| `high` | 6, 11, 8 | 19,788, 38,495, 21,113 | $0.28, $0.60, $0.31 | $0.40 | $0.92 | 3 of 3 |
+| `medium` | 4, 6, 5 | 7,962, 14,493, 12,171 | $0.11, $0.21, $0.18 | $0.17 | $0.69 | 1 of 3 |
+
+`high` stayed. `medium` cost 58% less, past the 20% the test required, but it also
+had to pass every check, and two of its runs gave no figure identified as a worst
+case. Runs were scored under shuffled labels before the arms were revealed. Their
+line items, tool totals, ceiling verdicts and `budget.md` files were all sound, and
+nothing hit `max_tokens`.
+
+This does not show that `medium` is worse. Those two runs are also the only two
+where the orchestrator's task to the analyst did not ask for a worst case, and
+that task is written before the analyst's effort has any effect. No prompt or skill
+requires one, so whether a brief gets a worst case currently depends on the
+orchestrator's wording. Three runs per arm can't separate the two causes, and
+retesting `medium` would need that requirement fixed first.
+
 ### The evaluation baseline
 
 `evals/` turns reading one run by hand into a scored comparison. Run `smoke` after
