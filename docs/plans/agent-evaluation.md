@@ -1,6 +1,6 @@
 # Plan: an evaluation suite for planner behaviour
 
-Status: phase 1 done 2026-11-04, on branch `feat/agent-evaluation`. Phase 2 is built. Its third live
+Status: phase 1 done 2026-11-04, merged in PR #5. Phase 2 is built and merged in PR #6. Its third live
 calibration, on 2026-11-05, kept `verdict_clear` (92% then 96% agreement, 93% then 100% of "no"s
 caught) and no other criterion. `usable` missed by one label at 84%. `risks_surfaced` reached 65%.
 `gaps_flagged`, reworded around claims stated as fact, fell from 64% to 48%: the judge said "no" to
