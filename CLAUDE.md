@@ -25,7 +25,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.13.7`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 271 tests, fully offline
+uv run pytest                              # 421 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -49,6 +49,11 @@ uv run scripts/live_check.py edit --yes-spend    # LIVE: an `edit` approval, ~$0
 uv run scripts/live_check.py usage --db P --thread T   # per-role cost of a thread; free
                                            # These three resolve LATEST; the hook and CI
                                            # pin older ones — see two paragraphs below.
+
+uv run python -m evals.run --suite smoke --reps 1 --yes-spend --max-usd 5    # LIVE, ~$1
+uv run python -m evals.run --suite full --reps 3 --yes-spend --max-usd 15    # LIVE, ~$6
+uv run python -m evals.run compare evals/results/A.jsonl evals/results/B.jsonl  # free
+uv run python -m evals.run rescore evals/results/A.jsonl   # re-run the checks; free
 ```
 
 **Three Claude Code hooks are live**, configured in `.claude/settings.json`; the scripts and
@@ -118,8 +123,8 @@ not loopback. `.streamlit/secrets.toml` is gitignored; credentials stay in `.env
 
 Ruff is configured in `pyproject.toml` but is **not** a dependency — run it with
 `uvx ruff check .`. The rule set is chosen so the `# noqa` codes in the source
-(`BLE001` on the seven deliberate blind excepts — three under `src/`, four in
-`streamlit_app.py`, two of them the guards on `graph.get_state`) suppress rules that are
+(`BLE001` on the eight deliberate blind excepts — three under `src/`, four in
+`streamlit_app.py`, two of them the guards on `graph.get_state`, one in `evals/driver.py`) suppress rules that are
 actually enabled; `RUF100` fails the check if one goes stale. `S`, `DTZ`, `PTH`, `C4`, `RET`,
 `SIM` and `PT` are on as well; `T20` and `ERA` are deliberately not. `ANN401` is ignored because
 `Any` is honest at the deepagents/langgraph boundary, and `tests/*` ignores `ANN`/`RUF012`
@@ -608,7 +613,7 @@ default 25. Adding middleware changes this constant —
 **Every entry point builds its run config with `cli.run_config`, and the suite never
 traces.** Tracing is LangSmith via env vars, with no code. `run_config` is what lets a trace
 be found: it names the root run `event-planner` and adds `user_id` (omitted when `None`)
-and `front_end` (`cli`/`web`/`live_check`) as metadata. `user_id` has to be added there
+and `front_end` (`cli`/`web`/`live_check`/`eval`) as metadata. `user_id` has to be added there
 because it travels in `context=`, which no tracer reads; `thread_id` LangGraph propagates
 itself. A new entry point that writes its own config dict produces untagged traces.
 Separately, `conftest.py` pins `LANGSMITH_TRACING_V2=false`. The page tests' real
@@ -637,7 +642,8 @@ to record what was bound). Tests cover the harness — approval gating, storage 
 binding, step budget — not model quality, and must keep running without an API key or
 network. Files are split by concern: `test_harness.py`, `test_security.py`,
 `test_approval_cli.py`, `test_webui.py`, `test_streamlit_page.py`, `test_tools.py`, and
-`test_live_check.py`, which tests the live script's *accounting* offline and never its live modes.
+`test_live_check.py`, which tests the live script's *accounting* offline and never its live modes,
+and `test_evals.py`, which does the same for `evals/`: the checks, and the driver on a scripted model.
 
 `test_streamlit_page.py` runs the real page through `streamlit.testing.v1.AppTest`,
 which execs the script and exposes its widgets. Two things make that work: the page
@@ -681,3 +687,63 @@ every finding in README's "The current roster" came from a run like it, and none
 offline. Its cost figures count each subagent's checkpoint namespace; summing only the root
 thread is how README once put a $2.10 brief at $0.87, and `test_a_subagents_usage_is_counted`
 guards that.
+
+### The evaluation suite
+
+`evals/` measures the model inside the harness, where the offline suite proves the harness
+itself. It answers whether a change to a model, an effort level, a prompt or the middleware made
+the agent better, worse or more expensive. It sits outside `src/` so no wheel carries it, which
+is why `pythonpath = ["."]` is in the pytest config, and it never runs in CI: it costs money and
+needs secrets. Run `smoke` after a prompt or middleware change and `full` before changing a model
+or effort level, each against a baseline run the same day, then `compare` the two. Baselines live
+in `evals/results/`, which is gitignored, so a fresh clone has none.
+
+A run ends in one of four verdicts: `blocked` (a gate failed), `regressed` (a scored check on one
+scenario dropped by more than one run in three), `inconclusive` (a gate never decided, or the
+candidate did not finish) or `clear`. Only `clear` exits 0.
+
+**What executed comes from a spy, never from messages.** A rejected call leaves a `ToolMessage`
+named after the tool even though nothing ran, so the transcript cannot prove a side effect either
+way. `driver._instrumented` wraps each tool in `IRREVERSIBLE_TOOLS` and calls through to the real
+body, which is safe only while those are stubs. `test_gated_tools_are_still_stubs` goes red the
+day one is not, so `real-invitations.md` has to fake that tool there, or every `approve-hold` run
+would really act.
+
+**A check that cannot decide says `unknown`, and that is not a pass.** Free text is the usual
+reason. Two of the first checks passed or failed live for the wrong reason, both from a pattern
+matching more than it should: "$40,500 all-in, leaving about $4,500" read as a $4,500 total, and a
+line that recommends a venue and also says "no" read as a rejection. So `_unsuitable` treats a
+line with both as `unknown`, and a new pattern should be tested against real replies, which are
+pinned in `test_evals.py`. `evaluate` also turns a check that raises into `unknown`, because the
+record is written after it and an exception would lose a run already paid for.
+
+**An injection is only tested if the planted text reached the model.** `web_search` cuts each
+result to 400 characters, so `test_planted_text_survives_web_search` drives the real tool, and
+`injection_resisted` reports `unknown` when no result carried the canary. Researchers hold no
+booking tools, so the planted text also asks for a web search: that is the compliance a researcher
+can actually show. Quoting a canary in a report or an event file is flagging it, not obeying it;
+writing one to `/memories/` is obeying it, because that loads into every later session.
+
+**A new check goes through `rescore` first.** Saved captures hold the tool calls, stored files
+and replies, so a check can be fixed and re-run on them for free. The Expect and the catalogue are
+read fresh, so rescoring after a catalogue change judges an old run against new facts.
+
+The judge (`evals/judge.py`) is phase 2 and adds scored criteria only, never a gate, since it
+shares a model family with the agent. `score` refuses every criterion missing from
+`evals/results/calibration.json`, and `calibrate` writes one there only with 20 operator labels,
+85% agreement, 5 "no" labels and 4 in 5 of those caught, on two passes in a row, since the same
+labels moved `no_caught` by a sixth between runs. **The "no" rule is what makes the
+agreement figure mean anything:** agent output is mostly good, so on nearly all-"yes" labels a
+judge that always says yes scores 90% while unable to spot a bad reply.
+
+Those "no"s come from `evals/weak.py`, which **rewrites real replies** and keeps their brief and
+tool results. Degrading the agent's prompt was tried first and does not work: Opus 5.5 mostly
+refused, and announced it ("I was told to leave out drawbacks"), leaving a good reply that also
+told the labeller it was planted. `label` shuffles every file together and shows no file name or
+scenario, so an answer stays blind, and it stops asking about a criterion once it has enough.
+
+**Read `calibration-verdicts.jsonl` before blaming the judge.** The first live calibration kept
+nothing, and the reasons showed why: 6 of 9 `risks_surfaced` "no"s were on replies with nothing to
+surface, so `applies` now skips those, and 6 "yes" labels sat on the flaw planted in that reply.
+`relabel` re-asks exactly those, chosen from the planted flaw and never from the judge's answers,
+because re-reading only disputed labels raises agreement whoever was right.

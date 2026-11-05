@@ -1,8 +1,15 @@
 # Plan: an evaluation suite for planner behaviour
 
-Status: not started. Written 2026-11-04 for a new session to carry out.
-Needs `dependency-upgrade.md` first. If built before `budget-analyst-effort.md`, that
-experiment can use the `full` suite in place of its manual scoring.
+Status: phase 1 done 2026-11-04, on branch `feat/agent-evaluation`. Phase 2 is built. Its first
+two live calibrations kept no criterion; the verdicts blamed an inapplicable `risks_surfaced`, six
+labels on planted flaws, and an ambiguous `gaps_flagged`. `risks_surfaced` is narrowed and two
+passes are now required. Waiting on the operator to run `relabel` and `label`, and to say how
+`gaps_flagged` should read, before calibrating again with `--max-usd 8`. Calibration also requires
+5 "no" labels per criterion, 4 in 5 of them caught, which this plan did not ask for: `evals/weak.py`
+supplies the "no"s. Phase 3 not started: it is only if wanted. Live spend is about $20, at most
+$21.84 since the first calibration's cost was not recorded, of which the first `full` baseline at
+three repetitions was $6.00, well under the estimates below. Written 2026-11-04 for a new session
+to carry out.
 
 ## Goal
 

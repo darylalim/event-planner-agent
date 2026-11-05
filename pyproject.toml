@@ -104,6 +104,9 @@ ignore = ["ANN401"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `evals/` sits outside `src/` so no wheel carries it, which leaves the repo root
+# as the only place tests/test_evals.py can import it from.
+pythonpath = ["."]
 addopts = ["--strict-markers", "--strict-config"]
 
 # ty is likewise not a dependency — run it with `uvx ty check`. It infers the
