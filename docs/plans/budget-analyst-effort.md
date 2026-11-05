@@ -1,6 +1,8 @@
 # Plan: test `budget-analyst` at `medium` effort
 
-Status: not started. Written 2026-11-04 for a new session to carry out.
+Status: done 2026-11-05. `high` kept: `medium` cost 58% less but passed every check in only
+1 of 3 runs. $5.37 spent. README's "The current roster" has the results and the confound.
+Written 2026-11-04 for a new session to carry out.
 Do `dependency-upgrade.md` first, including its uv version fix: without that fix,
 every `uv run` below fails.
 
