@@ -19,6 +19,7 @@ of the plan.
 | 4 | [agent-evaluation.md](agent-evaluation.md) | Session, then operator labels | About $25.60 spent (at most $27.30); about $1 smoke, $6 full | 2 | Phase 1 done; judge calibrated for `verdict_clear` only |
 | 5 | [real-invitations.md](real-invitations.md) | Session, after operator decisions | Provider costs; live sends need go-ahead | 2, 3, ideally 4 | Not started |
 | 6 | [budget-analyst-effort.md](budget-analyst-effort.md) | Session | $5.37 spent | 2, ideally 4 | Done; `high` kept |
+| 6b | [worst-case-budget.md](worst-case-budget.md) | Session | About $5, about $7 with the optional retest, stops at $8 | 4, 6 | Not started |
 | 7 | [artifacts-retention.md](artifacts-retention.md) | Session | None | 2 | Parked 2026-11-05: `/artifacts/` is empty, see the plan for what reopens it |
 | 7b | [checkpoint-retention.md](checkpoint-retention.md) | Session | None | 2 | Not started; not urgent until real client threads exist |
 | 8 | [streamlit-theme.md](streamlit-theme.md) | Session | One live turn for review | 2 | Not started |
@@ -35,7 +36,7 @@ field, and `real-invitations.md` blocks shared use on it.
 ## Rules for every plan
 
 - **Spending:** get the operator's go-ahead before any live model run. Planned spend
-  across all plans is about $37 plus two review turns. Do not pass $45 in total without
+  across all plans is about $44 plus two review turns. Do not pass $45 in total without
   the operator raising that limit.
 - **Real sends:** get the operator's go-ahead before any real email leaves the system.
 - **Public changes:** get the operator's go-ahead before anything that changes GitHub
