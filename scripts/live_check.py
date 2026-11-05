@@ -165,11 +165,23 @@ def thread_usage(graph: Any, checkpointer: Any, thread: str) -> list[Usage]:
     """
     root = graph.get_state(_config(thread)).values.get("messages", [])
     usages = [summarise("orchestrator", root)]
+    for messages in namespace_messages(checkpointer, thread):
+        usages.append(summarise(subagent_role(messages), messages))
+    return usages
+
+
+def namespace_messages(checkpointer: Any, thread: str) -> list[list[Any]]:
+    """Each subagent run's messages on `thread`, one list per checkpoint namespace.
+
+    Shared with `evals/driver.py`, which needs the tool calls as well as the
+    usage and would otherwise repeat this query.
+    """
     namespaces = checkpointer.conn.execute(
         "select distinct checkpoint_ns from checkpoints"
         " where thread_id = ? and checkpoint_ns != ''",
         (thread,),
     ).fetchall()
+    runs: list[list[Any]] = []
     for (namespace,) in namespaces:
         longest: list[Any] = []
         for saved in checkpointer.list(
@@ -178,8 +190,8 @@ def thread_usage(graph: Any, checkpointer: Any, thread: str) -> list[Usage]:
             messages = saved.checkpoint["channel_values"].get("messages") or []
             if len(messages) > len(longest):
                 longest = messages
-        usages.append(summarise(subagent_role(longest), longest))
-    return usages
+        runs.append(longest)
+    return runs
 
 
 def report(usages: list[Usage]) -> str:

@@ -11,6 +11,9 @@
 # Event files written out by the CLI's /export command
 exports/
 
+# Evaluation output: synthetic, but large, and per machine
+evals/results/
+
 # Python
 __pycache__/
 *.py[cod]

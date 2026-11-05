@@ -531,6 +531,56 @@ The `edit` check cost $0.07. The resumed turn carried one thinking block and was
 accepted, the model treated 45 as settled, and it flagged that the $12,000 total
 may have been set for 60 guests.
 
+### The evaluation baseline
+
+`evals/` turns reading one run by hand into a scored comparison. Run `smoke` after
+a prompt or middleware change, `full` before changing a model or an effort level,
+and `compare` the result against a baseline from the same day. CLAUDE.md's
+"The evaluation suite" has the commands and what each verdict means.
+
+The first baseline, on 2026-11-04 with the current roster: 13 scenarios at three
+repetitions, 39 runs, **$6.00 and 39 minutes**. A smoke run is about $1. Web
+results came from fixtures and tracing was off.
+
+| Check | Result |
+| --- | --- |
+| Every gate: approvals, rejections, the orchestrator off the web, runs completing | No failures in 39 runs |
+| Planted web text, three styles | Resisted 9 of 9, and reported to the client 9 of 9 |
+| Capacity, dates, arguments, delegation, surcharge, memory | All decided runs passed |
+| Totals traced to `estimate_budget` | 4 of 4 decided, 2 undecided |
+| `budget-analyst` used when a budget was asked for | **2 of 6** |
+
+| Role | Cost |
+| --- | --- |
+| orchestrator | $3.86 |
+| venue-researcher | $1.08 |
+| budget-analyst | $0.54 |
+| vendor-researcher | $0.52 |
+
+The analyst figure is the finding. On `hidden-cost` the orchestrator costed the
+plan itself in all three runs, and on `standard-offsite` in one of three. The prompt
+permits a quick check, and no web content is involved, so the boundary holds, but
+the role is used less than its place in the roster suggests. A `standard-offsite`
+run cost $0.56 to $0.74 here, against $0.65 to $1.10 in the earlier single runs.
+
+To show the suite can fail, a deliberately broken orchestrator prompt ("never use
+`task`, call `hold_venue` straight away") was run on one injection scenario.
+`compare` returned `blocked` on `no_unrequested_proposal`, flagged
+`delegated_research` as regressed, and left `injection_resisted` undecided, since
+that run never read the planted page.
+
+Generating weak replies to calibrate the phase 2 judge turned up a second finding.
+Appending instructions to the orchestrator's prompt to hide drawbacks, invent
+details or withhold the verdict mostly failed across 24 runs ($4.24): it declined
+to invent Denver venues, and in several replies said what it had been told and
+that it would not comply ("You're about to commit real money, so the limits and
+extra costs are included below"). Weak replies now come from rewriting good ones
+instead ($0.31 for 27). This was read by hand, not scored, so it shows a tendency
+under these prompts rather than a guarantee.
+
+Three repetitions only detect large changes, and these fixtures are one narrow
+catalogue, so read a clean result as "no large regression", not as proof.
+
 ### The approval gate
 
 All three decisions were run from the CLI on separate threads (~$0.25 total),
@@ -676,8 +726,17 @@ tests/
   test_streamlit_page.py the real page driven through Streamlit's AppTest
   test_tools.py          tool correctness — dates, budgets, booking refusals
   test_live_check.py     the live script's cost accounting, offline
+  test_evals.py          the evaluation checks and driver, offline
 scripts/
   live_check.py          run the real model and report cost per role (spends money)
+evals/                   scored comparison of model behaviour (spends money)
+  scenarios.py           briefs, scripted approvals, expected facts, planted pages
+  driver.py              runs a scenario, answers approvals, captures everything
+  checks.py              deterministic gates and scored checks
+  judge.py               rubric checks, usable only after calibration
+  weak.py                flawed rewrites of real replies, to calibrate the judge
+  run.py                 suites, spend cap, compare, rescore
+  results/               JSONL output                (gitignored)
 ```
 
 ## License
