@@ -25,7 +25,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.13.7`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 421 tests, fully offline
+uv run pytest                              # 428 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -747,3 +747,12 @@ nothing, and the reasons showed why: 6 of 9 `risks_surfaced` "no"s were on repli
 surface, so `applies` now skips those, and 6 "yes" labels sat on the flaw planted in that reply.
 `relabel` re-asks exactly those, chosen from the planted flaw and never from the judge's answers,
 because re-reading only disputed labels raises agreement whoever was right.
+
+**Rewording a criterion retires its labels, and that has to be enforced.** `label` skips anything
+already answered and any criterion at its target, so a reworded criterion was never asked again and
+`calibrate` compared the new wording against answers to the old, which measures the rewording
+rather than the judge. Each label now records its `wording`, and `read_labels` drops a mismatch but
+leaves it on disk. `UNSTAMPED_WORDING` is what labels saved before that answered, and it stays
+frozen. `gaps_flagged` is deliberately about claims, not omissions: "what is missing" has no end, so
+a judge cannot check it, while the claims in a reply can be listed. An omission counts only if the
+reply relies on it, and a drawback left out belongs to `risks_surfaced`.
