@@ -1,13 +1,14 @@
 # Plan: an evaluation suite for planner behaviour
 
-Status: phase 1 done 2026-11-04, on branch `feat/agent-evaluation`. Phase 2 is built. Its first
-two live calibrations kept no criterion; the verdicts blamed an inapplicable `risks_surfaced`, six
-labels on planted flaws, and an ambiguous `gaps_flagged`. `risks_surfaced` is narrowed and two
-passes are now required. Waiting on the operator to run `relabel` and `label`, and to say how
-`gaps_flagged` should read, before calibrating again with `--max-usd 8`. Calibration also requires
+Status: phase 1 done 2026-11-04, on branch `feat/agent-evaluation`. Phase 2 is built. Its third live
+calibration, on 2026-11-05, kept `verdict_clear` (92% then 96% agreement, 93% then 100% of "no"s
+caught) and no other criterion. `usable` missed by one label at 84%. `risks_surfaced` reached 65%.
+`gaps_flagged`, reworded around claims stated as fact, fell from 64% to 48%: the judge said "no" to
+12 of 25 replies against the operator's 7, mostly over small unsupported claims. Calibration requires
 5 "no" labels per criterion, 4 in 5 of them caught, which this plan did not ask for: `evals/weak.py`
-supplies the "no"s. Phase 3 not started: it is only if wanted. Live spend is about $20, at most
-$21.84 since the first calibration's cost was not recorded, of which the first `full` baseline at
+supplies the "no"s. Calibration has stopped there by the operator's choice. Scoring `verdict_clear` on
+the 2026-11-04 baseline gave 9 yes and 3 no across the 12 runs it applies to. Phase 3 not started: it is only if wanted. Live spend is about $25.60, at most
+$27.30 since the first calibration's cost was not recorded, of which the first `full` baseline at
 three repetitions was $6.00, well under the estimates below. Written 2026-11-04 for a new session
 to carry out.
 

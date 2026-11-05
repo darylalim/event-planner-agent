@@ -21,6 +21,10 @@ in a row, because the same labels moved `no_caught` by a sixth between two runs.
 
 `label` shuffles the files together and hides where each output came from, so
 knowing which file holds the weak ones cannot colour an answer.
+
+Each label records the wording it answered, and rewording a criterion retires its
+labels, so `label` asks them again rather than `calibrate` scoring the new wording
+against answers to the old.
 """
 
 from __future__ import annotations
@@ -81,6 +85,26 @@ _RECOMMENDS_NOTHING = {"approve-hold", "edit-hold", "reject-hold", "underspecifi
 MAX_EVIDENCE_CHARS = 60_000
 
 CRITERIA = {
+    "verdict_clear": (
+        "The reply states clearly whether the plan fits the budget ceiling, and that "
+        "verdict agrees with the figures in the tool results."
+    ),
+    "risks_surfaced": (
+        "The trade-offs and risks in the catalogue notes that the tool results show, for "
+        "the options the reply recommends, are surfaced in the reply."
+    ),
+    "gaps_flagged": (
+        "Every specific claim the reply states as fact comes from the brief or the tool "
+        "results, or follows from them. Anything else is marked as an assumption or as "
+        "unknown. Leaving something unmentioned is not a failure unless the reply relies "
+        "on it."
+    ),
+    "usable": "The answer is direct and usable by an event planner as it stands.",
+}
+
+#: What a label with no `wording` field answered: labels saved before they carried
+#: one. Frozen, so rewording any criterion retires those labels with no further edit.
+UNSTAMPED_WORDING = {
     "verdict_clear": (
         "The reply states clearly whether the plan fits the budget ceiling, and that "
         "verdict agrees with the figures in the tool results."
@@ -178,12 +202,24 @@ def _saved_labels(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
+def _answers_current_wording(record: dict[str, Any]) -> bool:
+    """Whether a label answered the question the judge is asked today.
+
+    Comparing a judge on new wording against answers to the old measures the
+    rewording, not the judge, and nothing about the result would say so.
+    """
+    criterion = record["criterion"]
+    wording = record.get("wording", UNSTAMPED_WORDING[criterion])
+    return wording == CRITERIA[criterion]
+
+
 def read_labels(path: Path = LABELS) -> list[dict[str, Any]]:
-    """Labels that still apply. Others stay on disk, so narrowing a criterion is undoable."""
+    """Labels that still count. Others stay on disk, so a change of criterion is undoable."""
     return [
         record
         for record in _saved_labels(path)
-        if applies(record["criterion"], Capture.from_json(record["capture"]))
+        if _answers_current_wording(record)
+        and applies(record["criterion"], Capture.from_json(record["capture"]))
     ]
 
 
@@ -265,6 +301,7 @@ def label(paths: list[Path], ask: Callable[[str], str] = input, out: Path = LABE
             record = {
                 "capture": capture.to_json(),
                 "criterion": criterion,
+                "wording": CRITERIA[criterion],
                 "human": answer,
             }
             with out.open("a") as stream:
@@ -276,6 +313,9 @@ def label(paths: list[Path], ask: Callable[[str], str] = input, out: Path = LABE
 
 def relabel(paths: list[Path], ask: Callable[[str], str] = input, out: Path = LABELS) -> int:
     """Re-ask each "yes" given to a reply on the very flaw planted in it.
+
+    A label on old wording is left for `label`, which asks it afresh: an answer
+    given here would still sit on a record that no longer counts.
 
     Selected from the planted flaw alone, never from the judge: re-reading only
     what the judge disputed would raise agreement whether or not the judge is
@@ -293,6 +333,7 @@ def relabel(paths: list[Path], ask: Callable[[str], str] = input, out: Path = LA
         if (
             record["human"] != "yes"
             or "first_answer" in record
+            or not _answers_current_wording(record)
             or planted.get(record["capture"]["user_id"]) != record["criterion"]
         ):
             continue

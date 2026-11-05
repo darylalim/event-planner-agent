@@ -16,7 +16,7 @@ of the plan.
 | 1 | [required-ci-checks.md](required-ci-checks.md) | Operator | None | Nothing | Done |
 | 2 | [dependency-upgrade.md](dependency-upgrade.md) | Session | $0.70-$1.05 | 1 | Done |
 | 3 | [harness-gaps.md](harness-gaps.md) | Session | None | 2 | Done |
-| 4 | [agent-evaluation.md](agent-evaluation.md) | Session, then operator labels | About $20 spent (at most $21.84); about $1 smoke, $6 full | 2 | Phase 1 done; judge failed first calibration, labels being revised |
+| 4 | [agent-evaluation.md](agent-evaluation.md) | Session, then operator labels | About $25.60 spent (at most $27.30); about $1 smoke, $6 full | 2 | Phase 1 done; judge calibrated for `verdict_clear` only |
 | 5 | [real-invitations.md](real-invitations.md) | Session, after operator decisions | Provider costs; live sends need go-ahead | 2, 3, ideally 4 | Not started |
 | 6 | [budget-analyst-effort.md](budget-analyst-effort.md) | Session | $3.90-$6, stops at $8 | 2, ideally 4 | Not started |
 | 7 | [artifacts-retention.md](artifacts-retention.md) | Session | None | 2 | Not started |

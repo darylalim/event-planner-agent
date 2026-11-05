@@ -1161,6 +1161,29 @@ def test_a_label_that_no_longer_applies_stays_on_disk_but_is_not_read(tmp_path):
     assert labels.read_text().count("risks_surfaced") == 1
 
 
+@pytest.mark.parametrize("criterion", sorted(judge.CRITERIA))
+def test_rewording_any_criterion_retires_its_labels(tmp_path, monkeypatch, criterion):
+    """Unstamped labels included, or the next rewording would keep them silently."""
+    labels = tmp_path / "labels.jsonl"
+    capture = Capture("hidden-cost", user_id="u").to_json()
+    record = {"capture": capture, "criterion": criterion, "human": "no"}
+    labels.write_text(json.dumps(record) + "\n")
+    if criterion != "gaps_flagged":
+        assert len(judge.read_labels(labels)) == 1
+    monkeypatch.setitem(judge.CRITERIA, criterion, "A reworded question.")
+    assert judge.read_labels(labels) == []
+    assert labels.read_text().count(criterion) == 1
+
+
+def test_an_unstamped_gaps_flagged_label_answered_the_old_wording(tmp_path):
+    """The live labels on disk: without this, `label` counts them as done."""
+    labels = tmp_path / "labels.jsonl"
+    capture = Capture("hidden-cost", user_id="u").to_json()
+    record = {"capture": capture, "criterion": "gaps_flagged", "human": "no"}
+    labels.write_text(json.dumps(record) + "\n")
+    assert judge.read_labels(labels) == []
+
+
 def test_scoring_skips_a_criterion_that_does_not_apply(tmp_path):
     path = tmp_path / "r.jsonl"
     _results_file(path, Capture("approve-hold", user_id="a", replies=["r"]))
@@ -1228,6 +1251,15 @@ def test_relabel_keeps_labels_that_no_longer_apply(tmp_path):
     assert labels.read_text().count("risks_surfaced") == 1
 
 
+def test_relabel_leaves_a_label_on_old_wording_to_label(tmp_path, monkeypatch):
+    """Its answer would sit on a record that no longer counts, and be lost."""
+    monkeypatch.setitem(judge.CRITERIA, "usable", "A reworded question.")
+    weak, labels = tmp_path / "weak.jsonl", tmp_path / "labels.jsonl"
+    _planted(weak, "usable")
+    _save(labels, _label_on("usable", "yes"))
+    assert judge.relabel([weak], lambda _prompt: pytest.fail("asked"), labels) == 0
+
+
 def test_calibration_that_hits_the_cap_keeps_nothing():
     with pytest.raises(RuntimeError, match="nothing kept"):
         judge.calibrate(_Reply("{}"), 0.0, [_labelled()])
@@ -1251,6 +1283,17 @@ def test_labels_are_saved_and_never_asked_twice(tmp_path):
     assert len(saved) == len(judge.CRITERIA)
     assert saved[0]["human"] == "yes"
     assert saved[1]["human"] == "no"
+
+
+def test_a_reworded_criterion_is_asked_again_and_its_answer_counts(tmp_path, monkeypatch):
+    results = _results_file(tmp_path / "r.jsonl", Capture("hidden-cost", user_id="u"))
+    labels = tmp_path / "labels.jsonl"
+    judge.label([results], ask=lambda _: "y", out=labels)
+    monkeypatch.setitem(judge.CRITERIA, "usable", "A reworded question.")
+
+    assert judge.label([results], ask=lambda _: "n", out=labels) == 1
+    fresh = [r for r in judge.read_labels(labels) if r["criterion"] == "usable"]
+    assert [(r["human"], r["wording"]) for r in fresh] == [("no", "A reworded question.")]
 
 
 def test_labelling_stops_asking_once_a_criterion_has_enough(tmp_path):
