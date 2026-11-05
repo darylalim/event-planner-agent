@@ -1,6 +1,20 @@
 # Plan: retention for `/artifacts/`
 
-Status: not started. Written 2026-11-04 for a new session to carry out.
+Status: parked 2026-11-05 at step 1, with nothing built. Written 2026-11-04 for a new session to carry out.
+
+Step 1 found nothing to purge, so the operator chose `checkpoint-retention.md` instead:
+
+- `.state/planner.sqlite` holds no artifact rows, but its last store write (2 August) predates the
+  `/artifacts/` route (25 August), so it proves nothing alone.
+- None of the 83 runs captured in `evals/results/` stored an artifact file, including the full
+  briefs. Each capture collects `artifacts` for the run's user.
+- Spill needs a tool result over about 80,000 characters, or a human message over about 200,000. The
+  largest recorded tool result is 30.6 KB, and `web_search` cuts each result's content to 400
+  characters.
+
+**Reopen this plan if** any artifact row appears in a real database, or a new tool can return a large
+result. The findings and design below still hold. Re-check them then.
+
 Do `dependency-upgrade.md` first: this work calls the store API that upgrade moves,
 and it needs that plan's uv version fix. It does not depend on
 `budget-analyst-effort.md`.

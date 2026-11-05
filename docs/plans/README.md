@@ -19,7 +19,8 @@ of the plan.
 | 4 | [agent-evaluation.md](agent-evaluation.md) | Session, then operator labels | About $25.60 spent (at most $27.30); about $1 smoke, $6 full | 2 | Phase 1 done; judge calibrated for `verdict_clear` only |
 | 5 | [real-invitations.md](real-invitations.md) | Session, after operator decisions | Provider costs; live sends need go-ahead | 2, 3, ideally 4 | Not started |
 | 6 | [budget-analyst-effort.md](budget-analyst-effort.md) | Session | $3.90-$6, stops at $8 | 2, ideally 4 | Not started |
-| 7 | [artifacts-retention.md](artifacts-retention.md) | Session | None | 2 | Not started |
+| 7 | [artifacts-retention.md](artifacts-retention.md) | Session | None | 2 | Parked 2026-11-05: `/artifacts/` is empty, see the plan for what reopens it |
+| 7b | [checkpoint-retention.md](checkpoint-retention.md) | Session | None | 2 | Not started; not urgent until real client threads exist |
 | 8 | [streamlit-theme.md](streamlit-theme.md) | Session | One live turn for review | 2 | Not started |
 | 9 | [streamlit-layout.md](streamlit-layout.md) | Session | One live turn for review | 2, 8 | Not started |
 | 10 | [readme-restructure.md](readme-restructure.md) | Session | None | All others | Not started |
