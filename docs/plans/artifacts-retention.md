@@ -137,7 +137,7 @@ database, and a delete nobody asked for should not ride on opening a page.
 
 6. **Update the docs:**
 
-   - `README.md`: add retention to the Storage section, including that it isn't
+   - `docs/architecture.md`: add retention to the Storage section, including that it isn't
      erasure and that a resumed thread keeps only the preview.
    - `CLAUDE.md`: add the store-wide TTL trap to "Invariants that fail silently",
      add the command, and update the test count and file list.

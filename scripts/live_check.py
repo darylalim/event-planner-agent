@@ -9,8 +9,8 @@ without `--yes-spend`. `usage` reads a database and spends nothing.
     uv run scripts/live_check.py usage --db PATH --thread NAME
 
 The offline suite fakes the model, so it cannot see what only the real one
-does. Each finding in README's "The current roster" came from a run like this:
-a silent 4,096-token output cap, an orchestrator that stopped delegating, an
+does. Each finding in "The current roster" in docs/verified-live.md came from a
+run like this: a silent 4,096-token output cap, an orchestrator that stopped delegating, an
 operator `edit` read as a fault. Run `brief` after changing a model, an effort
 level, a prompt, or the middleware stack, and record the result there.
 
@@ -53,7 +53,7 @@ from event_planner.context import PlannerContext
 from event_planner.subagents import SUBAGENTS
 from event_planner.webui import open_persistence
 
-#: The brief every recorded run in README uses, so runs stay comparable. Note
+#: The brief every recorded run in `docs/verified-live.md` uses, so runs stay comparable. Note
 #: the date is deliberately wrong — 19 September 2026 is a Saturday — and
 #: flagging it is part of what a good answer does.
 BRIEF = (

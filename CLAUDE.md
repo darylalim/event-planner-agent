@@ -6,9 +6,9 @@ An event planning agent built on [Deep Agents](https://docs.langchain.com/oss/py
 (`deepagents` 0.7.32), which wraps LangGraph. `create_deep_agent` returns a compiled
 LangGraph graph, so checkpointers, `interrupt()`, streaming, and Studio all work underneath.
 
-`README.md` is detailed and current — read it for the *why* behind the design, the
-storage/tenant-isolation rationale, and the recorded live-run results. This file covers
-what you need to *change code* safely.
+`README.md` is the short front door. Read `docs/architecture.md` for the *why* behind the
+design and the storage/tenant-isolation rationale, and `docs/verified-live.md` for the
+recorded live-run results. This file covers what you need to *change code* safely.
 
 **`main` requires a pull request and passing CI.** Ruleset `main requires CI` makes the six CI
 checks required and blocks force pushes and deletion, with no bypass actors, so every change,
@@ -177,7 +177,7 @@ filesystem backend is the **default**, not a route:
 `/artifacts/` is deepagents' territory: `FilesystemMiddleware` derives
 `<root>/large_tool_results/` and `<root>/conversation_history/` from the composite's
 `artifacts_root` and offloads client data there on its own, so nothing in this repo names
-those paths at a call site — which is why the route was missed. README's Storage section has
+those paths at a call site — which is why the route was missed. `docs/architecture.md`'s Storage section has
 the token limits and what spills into each.
 
 **Route the root, never the names derived beneath it.** Those names are deepagents' to change,
@@ -615,7 +615,7 @@ per invocation**, while the `before_model` node (Skills) and the two `after_mode
 deepagents 0.7.32 added the `before_model` and `after_agent` nodes, which took it from `6 + 4N`;
 both are no-ops here but still count. `test_harness.py`'s `_FIXED_OVERHEAD` comment records the
 correct decomposition.
-README's
+`docs/architecture.md`'s
 "Step budget" has the trace, and explains why the front ends' `DEFAULT_MAX_STEPS = 200`
 *lowers* `create_deep_agent`'s `recursion_limit: 9_999` rather than raising LangGraph's
 default 25. Adding middleware changes this constant —
@@ -630,7 +630,7 @@ itself. A new entry point that writes its own config dict produces untagged trac
 Separately, `conftest.py` pins `LANGSMITH_TRACING_V2=false`. The page tests' real
 `_load_env` leaks `.env`'s `LANGSMITH_TRACING=true` and the real key into `os.environ`, and
 a narrowed run once attempted 45 uploads; the full run only escaped because langsmith's
-`get_env_var` is `lru_cache`d. `test_the_suite_never_traces` guards it. README's "Tracing"
+`get_env_var` is `lru_cache`d. `test_the_suite_never_traces` guards it. `docs/architecture.md`'s "Tracing"
 records why traces sit outside tenant isolation.
 
 ## deepagents 0.7.32 vs. published docs
@@ -687,14 +687,14 @@ Tavily and degrades to an explanatory string without `TAVILY_API_KEY`.
 
 Model-dependent behaviour that offline tests cannot reach — adaptive thinking blocks in a
 resumed approval, skill application, cross-session recall — is verified against the live
-model and recorded in README.md's "Verified live" section. Update it when those paths change.
+model and recorded in `docs/verified-live.md`. Update it when those paths change.
 
 `scripts/live_check.py` is how. It sits outside `src/` so no wheel carries it, and outside
 pytest's `test_*.py` pattern so nothing collects it; `brief` and `edit` refuse to run without
 `--yes-spend`, and default to a fresh database under the system temp dir — never
 `.state/planner.sqlite`, since a live run writes memories every later session for that user
 loads. Run `brief` after changing a model, an effort level, a prompt or the middleware stack:
-every finding in README's "The current roster" came from a run like it, and none was visible
+every finding in `docs/verified-live.md`'s "The current roster" came from a run like it, and none was visible
 offline. Its cost figures count each subagent's checkpoint namespace; summing only the root
 thread is how README once put a $2.10 brief at $0.87, and `test_a_subagents_usage_is_counted`
 guards that.

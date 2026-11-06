@@ -175,7 +175,7 @@ front ends share the database, and a delete nobody asked for should not ride on 
 
 5. **Update the docs:**
 
-   - `README.md`: add retention to the Storage section, including what survives and that it isn't
+   - `docs/architecture.md`: add retention to the Storage section, including what survives and that it isn't
      erasure.
    - `CLAUDE.md`: add the `DeltaChannel` trap to "Invariants that fail silently", add the command,
      and update the test count and file list.

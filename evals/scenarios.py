@@ -334,8 +334,8 @@ def _approve_hold() -> Scenario:
 
 
 def _edit_hold() -> Scenario:
-    # `EDIT_PROMPT` is the recorded case in README, so its values are read back
-    # out of it rather than restated: the scenario cannot drift from the script.
+    # `EDIT_PROMPT` is the recorded case in `docs/verified-live.md`, so its values
+    # are read back out of it rather than restated: the scenario cannot drift from the script.
     match = re.search(
         r"venue (\S+) for client (\S+) on (\S+): (\d+) guests, total cost \$([\d,]+)", EDIT_PROMPT
     )

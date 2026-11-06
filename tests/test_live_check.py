@@ -61,7 +61,7 @@ def _scripted(*responses):
 
 
 def test_cost_reproduces_the_recorded_figure(live):
-    """README's `full-brief-3` orchestrator, priced at Opus 5 rates, is $0.87.
+    """`docs/verified-live.md`'s `full-brief-3` orchestrator, priced at Opus 5 rates, is $0.87.
     Pinned so a pricing or formula change cannot quietly move every figure."""
     usage = live.Usage("orchestrator", ("claude-opus-5",), 13, 392_563, 336_253, 0, 16_943)
     assert round(usage.cost(), 2) == 0.87
@@ -161,7 +161,7 @@ def test_a_subagents_usage_is_counted(live, tmp_path, monkeypatch):
         130,
     )
     assert venue.models == ("claude-sonnet-5-5",)
-    # The total is what README quotes, so it must include the subagent.
+    # The total is what `docs/verified-live.md` quotes, so it must include the subagent.
     assert "TOTAL" in live.report(list(usages.values()))
 
 
