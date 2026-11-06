@@ -46,6 +46,13 @@ gatherUsageStats = false
 # toggle in the app's settings menu — a single [theme] block locks the app to
 # one mode, which is the wrong default for a tool someone leaves open all day.
 #
+# The two modes are deliberate mirrors: every neutral comes from one warm hue
+# family, surfaces step page, sidebar, panel, code in the same order, and each
+# step has a similar contrast in both. A change to one mode needs the matching
+# step checked in the other. Indigo is the only accent and is not a status
+# colour: red stays for irreversible actions and errors, green for success, so
+# the primary action cannot be mistaken for either.
+#
 # No webfont. Google Fonts would mean the page fetching from a third-party host
 # on every load, which sits badly with an app documented as loopback-only and
 # handling client PII — and the font would silently fall back offline anyway.
@@ -77,57 +84,57 @@ linkUnderline = false
 # pick (#6366F1, indigo-500) fails the first at 4.47:1 — worth measuring rather
 # than eyeballing, since the primary button here is the one that commits money.
 primaryColor = "#5850EC"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#FAFAFA"
-codeBackgroundColor = "#F4F4F5"
-textColor = "#09090B"
+backgroundColor = "#FDFCFA"
+secondaryBackgroundColor = "#F4F1EC"
+codeBackgroundColor = "#F1EEE8"
+textColor = "#1C1917"
 linkColor = "#4338CA"
-borderColor = "#E4E4E7"
-codeTextColor = "#18181B"
+borderColor = "#CFCAC2"
+codeTextColor = "#1C1917"
 # Semantic colours, all >=4.5:1 as *text* on this background. That is not what a
 # badge renders: given only `redColor`, Streamlit derives the badge fill from it
 # at 10% opacity (20% in dark) and the badge text at ±15% lightness, so the
 # "Irreversible" badge on the approval panel shows neither value below. Measure
 # the derived pairing, not this one, before changing `redColor`.
-redColor = "#DC2626"
-orangeColor = "#C2410C"
-yellowColor = "#A16207"
-greenColor = "#15803D"
+redColor = "#C62828"
+orangeColor = "#B8430F"
+yellowColor = "#8F5C0E"
+greenColor = "#1B7A3D"
 blueColor = "#2563EB"
 violetColor = "#7C3AED"
-grayColor = "#71717A"
+grayColor = "#6F6A64"
 
 [theme.dark]
 primaryColor = "#5850EC"
-backgroundColor = "#0E0E11"
-secondaryBackgroundColor = "#18181B"
-codeBackgroundColor = "#18181B"
-textColor = "#E4E4E7"
+backgroundColor = "#151413"
+secondaryBackgroundColor = "#211F1D"
+codeBackgroundColor = "#262421"
+textColor = "#EDE9E3"
 linkColor = "#A5B4FC"
-borderColor = "#27272A"
-codeTextColor = "#E4E4E7"
+borderColor = "#45413C"
+codeTextColor = "#EDE9E3"
 redColor = "#F87171"
 orangeColor = "#FB923C"
 yellowColor = "#FACC15"
 greenColor = "#4ADE80"
 blueColor = "#60A5FA"
 violetColor = "#A78BFA"
-grayColor = "#A1A1AA"
+grayColor = "#A8A29E"
 
 [theme.light.sidebar]
 # One step back from the transcript, which is where the operator's attention
 # belongs. The sidebar is settings and downloads, not the work.
-backgroundColor = "#FAFAFA"
-secondaryBackgroundColor = "#F4F4F5"
-codeBackgroundColor = "#F4F4F5"
-textColor = "#09090B"
-borderColor = "#E4E4E7"
+backgroundColor = "#F7F5F1"
+secondaryBackgroundColor = "#EDE9E2"
+codeBackgroundColor = "#EDE9E2"
+textColor = "#1C1917"
+borderColor = "#CFCAC2"
 primaryColor = "#5850EC"
 
 [theme.dark.sidebar]
-backgroundColor = "#141417"
-secondaryBackgroundColor = "#1F1F23"
-codeBackgroundColor = "#1F1F23"
-textColor = "#E4E4E7"
-borderColor = "#27272A"
+backgroundColor = "#1B1A18"
+secondaryBackgroundColor = "#2A2825"
+codeBackgroundColor = "#2A2825"
+textColor = "#EDE9E3"
+borderColor = "#45413C"
 primaryColor = "#5850EC"

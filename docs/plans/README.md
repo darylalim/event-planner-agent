@@ -22,7 +22,7 @@ of the plan.
 | 6b | [worst-case-budget.md](worst-case-budget.md) | Session | $5.44 spent | 4, 6 | Done; optional `medium` retest not run |
 | 7 | [artifacts-retention.md](artifacts-retention.md) | Session | None | 2 | Parked 2026-11-05: `/artifacts/` is empty, see the plan for what reopens it |
 | 7b | [checkpoint-retention.md](checkpoint-retention.md) | Session | None | 2 | Not started; not urgent until real client threads exist |
-| 8 | [streamlit-theme.md](streamlit-theme.md) | Session | One live turn for review | 2 | Not started |
+| 8 | [streamlit-theme.md](streamlit-theme.md) | Session | None; reviewed on a scripted model | 2 | Done; $0 spent |
 | 9 | [streamlit-layout.md](streamlit-layout.md) | Session | One live turn for review | 2, 8 | Not started |
 | 10 | [readme-restructure.md](readme-restructure.md) | Session | None | All others | Not started |
 

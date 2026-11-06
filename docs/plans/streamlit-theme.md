@@ -1,6 +1,7 @@
 # Plan: "Ink on paper" Streamlit theme
 
-Status: not started. Written 2026-11-04 for a new session to carry out.
+Status: done 2026-11-06, signed off by the operator from screenshots of both modes. Written
+2026-11-04 for a new session to carry out.
 Independent of the other plans, except that it should land before
 `readme-restructure.md`, which moves the README's description of the theme.
 
@@ -35,7 +36,7 @@ The two modes are mirrors, and that is measurable:
 
 ## Measured results
 
-WCAG contrast ratios, calculated on 2026-11-04. Nothing has been checked visually yet.
+WCAG contrast ratios, calculated on 2026-11-04 and reproduced on 2026-11-06.
 
 | Pair | Light now | Light new | Dark now | Dark new | Target |
 | --- | --- | --- | --- | --- | --- |
@@ -61,6 +62,35 @@ WCAG contrast ratios, calculated on 2026-11-04. Nothing has been checked visuall
   pairs measured worse in light mode than Streamlit's derived ones (red 5.49 against
   7.98). Those derived figures (7.18 or higher) assume the 10%/20% fill and 15%
   lightness shift described in `config.toml`, so confirm the badge visually.
+
+## Review results
+
+Reviewed on 2026-11-06 in both modes through headless Chromium, with figures read from the
+rendered page. The real page, graph and approval gate ran on a scripted model, so the review
+made no API call and spent nothing. The alerts, `st.metric` and sidebar downloads were checked
+on a separate swatch page using this config, because the scripted turn doesn't reach them.
+
+| Rendered pair | Light before | Light now | Dark before | Dark now | Target |
+| --- | --- | --- | --- | --- | --- |
+| "Irreversible" badge | not measured | 7.91 | not measured | 8.38 | >= 4.5 |
+| Error alert | 6.88 | 7.91 | 8.94 | 8.38 | >= 4.5 |
+| Warning alert | 9.57 | 10.51 | 9.14 | 8.50 | >= 4.5 |
+| Info alert | 7.43 | 7.26 | 8.82 | 8.27 | >= 4.5 |
+| Success alert | 10.81 | 10.77 | 8.87 | 8.28 | >= 4.5 |
+| Selected segment label | 4.83 | 4.72 | 3.24 | 3.07 | >= 4.5 |
+
+The operator signed off with these points open:
+
+- **Selected decision in dark mode:** Streamlit draws the selected segment's label in
+  `primaryColor`, so "Approve" is 3.07:1, under 4.5. It was already under, at 3.24. Fixing it
+  means a lighter primary, which this plan rejected, or custom CSS, which is out of scope.
+- **Light warning alert:** its fill (`#F2ECE2`) is close to the code surface (`#F1EEE8`), at
+  1.015 against 1.038 before, so a warning relies more on its icon and text. Setting a warning
+  fill would go against the badge rule above, so it was left alone.
+- **User chat bubble:** it stays cool (`#F6F7F8`, `#1E1E22`) because no theme key was found for
+  it, so the one neutral hue family has this exception.
+- **Avatars:** Streamlit colours them from `redColor` and `orangeColor`, so red appears beside
+  every user message despite being reserved. This was already the case.
 
 ## Change
 
