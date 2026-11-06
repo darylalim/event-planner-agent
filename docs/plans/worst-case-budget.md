@@ -1,6 +1,8 @@
 # Plan: require a worst case in every budget
 
-Status: not started. Written 2026-11-05 for a new session to carry out.
+Status: done 2026-11-05, $5.44 spent, optional `medium` retest not run. Results are in
+README's "The current roster". No run had the orchestrator do all the costing itself, so
+that path has no live evidence. Written 2026-11-05 for a new session to carry out.
 Read README's "The current roster" first: its 2026-11-05 experiment is why this exists.
 
 ## Goal

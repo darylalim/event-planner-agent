@@ -372,6 +372,55 @@ def test_stated_totals_trace_to_a_tool_result(reply, status):
     assert _status(checks.totals_trace_to_tools, capture, BUDGET) == status
 
 
+@pytest.mark.parametrize(
+    ("reply", "status"),
+    [
+        ("Worst case: $41,442, about $3,558 under.", "pass"),
+        ("That is $41,400 in the worst case.", "pass"),
+        ("About $41,442 in the realistic worst case.", "pass"),
+        ("**$41,442** (worst case)", "pass"),
+        ("| B. Plus hired AV — realistic worst case | **$41,442** | +$3,558 |", "pass"),
+        ("Realistic total $38,261, worst-case total $41,442.", "pass"),
+        ("In the realistic worst case you'd have about $3,600 to spare.", "unknown"),
+        ("Realistic $38,261, worst case margin of $3,000.", "unknown"),
+        ("$38,261 realistic and worst case $3,000 more.", "unknown"),
+        ("| | Realistic | Worst case |\n| Total | $38,261 | $41,442 |", "unknown"),
+        ("The worst case is still under your ceiling.", "unknown"),
+        ("Worst case: $47,000.", "unknown"),
+        ("**Bad case:** about $41,442. That still fits.", "fail"),
+        ("Total: $38,261.", "fail"),
+    ],
+    ids=[
+        "label-first",
+        "figure-first",
+        "qualified",
+        "bracketed",
+        "table-row-live",
+        "beside-realistic",
+        "margin-live",
+        "margin-beside-realistic",
+        "realistic-before-label",
+        "label-in-header",
+        "no-figure",
+        "untraced",
+        "bad-case-live",
+        "no-worst-case",
+    ],
+)
+def test_a_worst_case_needs_a_computed_figure_beside_its_label(reply, status):
+    calls = [_estimate("38,261"), _estimate("41,442")]
+    capture = _capture(calls=calls, reply=reply)
+    assert _status(checks.worst_case_stated, capture, BUDGET) == status
+
+
+def test_a_worst_case_is_only_asked_of_a_costed_brief():
+    check = checks.worst_case_stated
+    assert _status(check, _capture(reply="Fits."), NOTHING) == "na"
+    assert _status(check, _capture(reply="Worst case: $41,442."), BUDGET) == "unknown"
+    assert "worst_case_stated" in checks.SCORED
+    assert "worst_case_stated" not in checks.GATES
+
+
 def test_a_total_with_no_estimate_behind_it_fails():
     capture = _capture(reply="Total: $43,412.")
     assert _status(checks.totals_trace_to_tools, capture, BUDGET) == "fail"

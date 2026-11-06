@@ -56,7 +56,22 @@ quote. Never present a budget with no contingency.
 Label each line as **quoted** or **estimated**. A budget of estimates with a
 precise-looking total is misleading.
 
-### 5. When the plan is over budget
+### 5. State a worst case for the recommended plan
+
+A realistic total says what the plan should cost. The client also needs to know
+how far that can move before they sign, so every costed plan carries a worst case.
+
+The worst case is the recommended plan with the same venue and vendors, every
+estimated line at the top of its plausible range, and any unconfirmed minimum
+applied. Keep the headcount and the contingency rate the same. A pricier caterer,
+another venue or a different date is a different plan, and says nothing about what
+the client would be signing up for.
+
+Run it through `estimate_budget`, and report it as the "worst case" beside the
+realistic total, each compared with the ceiling. If every line is a written quote,
+the two are the same: say so rather than inventing a range.
+
+### 6. When the plan is over budget
 
 Do not silently shave numbers to fit. Propose specific cuts with their savings,
 ranked by how much they damage the event. State the damage honestly:
@@ -72,4 +87,5 @@ Give the client the choice. Do not make it for them.
 
 Use `estimate_budget` for the arithmetic rather than computing totals yourself,
 so the numbers are reproducible. Write the breakdown to the file path you were
-given and return the totals plus your assessment of whether the plan fits.
+given and return the realistic and worst-case totals plus your assessment of
+whether the plan fits.
