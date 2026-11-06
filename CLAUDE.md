@@ -482,6 +482,14 @@ The same reasoning is why that button takes no gate either — it renders *after
 so it never exists inside the window at all, and gating it only killed it on the one run a
 failed resume produces.
 
+**The page only follows a streaming turn while `chat_input` sits at the top level.** Wrap it
+in `st.bottom` and it still pins and can be centred, but `scrollTop` stays at 0 for the whole
+turn, with no error. Measured on 1.66.1 in `streamlit-layout.md`'s spike, which is also why
+the page stays `layout="centered"`: a top-level input cannot be centred under a capped
+transcript. The same coupling works against the approval panel. The input is not rendered
+during an approval, so the page jumps to the top as the panel appears, with the panel below a
+long transcript and off-screen.
+
 **The replay and the live stream can carry the same message, and appending both misleads.**
 `HumanInTheLoopMiddleware.after_model` re-emits the proposing message as its node update, and
 the model node that produced it was checkpointed a super-step earlier — so the run that

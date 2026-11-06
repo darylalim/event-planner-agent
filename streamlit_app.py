@@ -424,8 +424,7 @@ def _committed_figures(args: Any) -> list[tuple[str, float]]:
     not a dict at all is possible — the interrupt payload is deepagents' to
     emit, not this page's to guarantee — and an exception inside the approval
     panel takes the whole page down with a booking still parked, so an
-    unusable shape yields nothing rather than raising. The empty result also
-    guards `st.columns(0)`, which raises.
+    unusable shape yields nothing rather than raising.
     """
     if not isinstance(args, dict):
         return []
@@ -562,6 +561,7 @@ def _approval_panel(
                 key=f"choice-{token}",
                 format_func=str.capitalize,
                 required=True,
+                width="stretch",
             )
 
             # What this decision would actually execute with, or `None` when
@@ -621,14 +621,17 @@ def _approval_panel(
             # exists for cannot arise here. Reads only `action` and this
             # fragment's own widgets, so the no-graph-state rule holds.
             if figures := _committed_figures(executing):
-                columns = st.columns(len(figures))
-                for column, (label, value) in zip(columns, figures, strict=True):
-                    column.metric(
-                        label,
-                        value,
-                        format="dollar" if label.endswith("_usd") else "localized",
-                        border=True,
-                    )
+                # A horizontal container rather than `st.columns`, which gives
+                # every figure an equal slice however many there are and only
+                # stacks them below 640px.
+                with st.container(horizontal=True):
+                    for label, value in figures:
+                        st.metric(
+                            label,
+                            value,
+                            format="dollar" if label.endswith("_usd") else "localized",
+                            border=True,
+                        )
 
     # The middleware wants exactly one decision per action, in order — a mismatch
     # raises rather than being padded, so the button stays disabled until every
@@ -640,6 +643,7 @@ def _approval_panel(
         type="primary",
         disabled=not ready,
         icon=":material/send:",
+        width="stretch",
     )
     # `not blocked` already implies every action produced a decision, so this is
     # simply the negation of `ready` — an earlier `not ready and not blocked`
@@ -1069,7 +1073,12 @@ else:
         # which carries that run's `disabled=False` and cannot be gated from
         # here. Gating it only disabled the button on the run that a failed
         # resume produced, which is the one run it was written for.
-        if st.button("Resume unfinished turn", type="primary", icon=":material/play_arrow:"):
+        if st.button(
+            "Resume unfinished turn",
+            type="primary",
+            icon=":material/play_arrow:",
+            width="stretch",
+        ):
             st.session_state.pending_input = RESUME_PENDING
             st.rerun()
 
