@@ -23,7 +23,7 @@ of the plan.
 | 7 | [artifacts-retention.md](artifacts-retention.md) | Session | None | 2 | Parked 2026-11-05: `/artifacts/` is empty, see the plan for what reopens it |
 | 7b | [checkpoint-retention.md](checkpoint-retention.md) | Session | None | 2 | Not started; not urgent until real client threads exist |
 | 8 | [streamlit-theme.md](streamlit-theme.md) | Session | None; reviewed on a scripted model | 2 | Done; $0 spent |
-| 9 | [streamlit-layout.md](streamlit-layout.md) | Session | One live turn for review | 2, 8 | Not started |
+| 9 | [streamlit-layout.md](streamlit-layout.md) | Session | None; reviewed on a scripted model | 2, 8 | Phase 1 done, $0 spent; phase 2 stopped at its spike |
 | 10 | [readme-restructure.md](readme-restructure.md) | Session | None | All others | Not started |
 
 Plans 3-9 can move around as long as their "Needs first" column holds. Plan 10 stays last,
@@ -36,7 +36,7 @@ field, and `real-invitations.md` blocks shared use on it.
 ## Rules for every plan
 
 - **Spending:** get the operator's go-ahead before any live model run. Planned spend
-  across all plans is about $44 plus two review turns. Do not pass $45 in total without
+  across all plans is about $44. Do not pass $45 in total without
   the operator raising that limit.
 - **Real sends:** get the operator's go-ahead before any real email leaves the system.
 - **Public changes:** get the operator's go-ahead before anything that changes GitHub

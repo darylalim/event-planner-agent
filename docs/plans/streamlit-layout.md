@@ -1,8 +1,8 @@
 # Plan: a Streamlit layout that adapts to any display
 
-Status: not started. Written 2026-11-04 for a new session to carry out.
-Do this after `streamlit-theme.md` and before `readme-restructure.md`.
-Phase 2 is conditional: run it only if its spike passes.
+Status: phase 1 done 2026-11-06, $0 spent, reviewed on a scripted model. Phase 2 stopped at
+its spike, which failed criteria 3 and 6; see "Spike results". Written 2026-11-04 for a new
+session to carry out.
 
 ## Goal
 
@@ -118,6 +118,42 @@ If any fails, stop at phase 1 and report what happened. Phase 1 stands by itself
    the panel stacks; if that can't be detected, drop it in favour of the panel's border.
 4. Keep `st.chat_input` at the top level, or it stops pinning to the bottom.
 5. Keep the "Resume unfinished turn" flow and its ordering after `_stream_turn`.
+
+### Spike results
+
+Run 2026-11-06 on Streamlit 1.66.1 in headless Chromium, at all five widths with the sidebar
+open and closed. Phase 2 was not built.
+
+| # | Criterion | Result |
+| --- | --- | --- |
+| 1 | Wraps, no horizontal scroll | Pass. Beside from 1920px, stacked below that. |
+| 2 | Transcript fills a phone | Pass: 360px of 390px. |
+| 3 | `chat_input` pinned and aligned | **Fail**, see below. |
+| 4 | Fragment reruns alone | Pass: fragment runs went up, full runs did not. |
+| 5 | Streaming into slots | Pass. |
+| 6 | No bad jump when the panel appears | **Fail**: the transcript moves 228px sideways at 1920px. |
+
+Criterion 3 has no good option, measured at 1920px with the sidebar open and the transcript
+at x=721:
+
+- `width="stretch"` at the top level stays centred, but is 1489px wide under a 760px
+  transcript, and 2129px at 2560px.
+- `width=760` at the top level sits at x=356, 365px left of the transcript. It cannot be
+  centred, because nothing wraps a top-level `chat_input`.
+- Inside `st.bottom` with a centred row, it lines up exactly but the page stops following the
+  output: `scrollTop` stayed at 0 through a streamed turn. A 672s turn would run off-screen.
+
+Criterion 6 is the panel recentring the pair, and it moves back after each decision. Reserving
+the column would stop that, but leaves the transcript off-centre the rest of the time.
+
+If this is reopened, use `vertical_alignment="top"`. The page scrolls to the top when the panel
+appears, so a top-aligned panel was fully visible and a bottom-aligned one was not visible at all.
+
+### Found on the way: the approval panel lands off-screen
+
+This is the current page, not phase 2. `chat_input` is not rendered during an approval, and the
+page jumps to the top when it goes. On the real page with a long transcript, `scrollTop` was
+0 of 5026 right after the turn, with the submit button 5702px down. Not fixed here.
 
 ## Verification
 
