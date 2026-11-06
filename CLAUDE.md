@@ -25,7 +25,7 @@ uv sync                                    # install (uv required; .python-versi
                                            # Mismatch -> `uv self update 0.13.7`
 cp .env.example .env                       # then fill in ANTHROPIC_API_KEY
 
-uv run pytest                              # 444 tests, fully offline
+uv run pytest                              # 445 tests, fully offline
 uv run pytest tests/test_security.py       # one file
 uv run pytest -k namespaces                # one pattern
 uv run pytest tests/test_tools.py::test_hold_refuses_an_unknown_venue -v
@@ -486,9 +486,12 @@ failed resume produces.
 in `st.bottom` and it still pins and can be centred, but `scrollTop` stays at 0 for the whole
 turn, with no error. Measured on 1.66.1 in `streamlit-layout.md`'s spike, which is also why
 the page stays `layout="centered"`: a top-level input cannot be centred under a capped
-transcript. The same coupling works against the approval panel. The input is not rendered
-during an approval, so the page jumps to the top as the panel appears, with the panel below a
-long transcript and off-screen.
+transcript. The same coupling is why the approval branch draws a `chat_input` at all. With none
+rendered, the page jumped to the top as the panel appeared, leaving the panel below a long
+transcript and off-screen. It is `disabled` with no `on_submit`, so no value can reach
+`pending_input` even if `disabled` stopped being enforced; a message queued there would run
+against a thread holding a `tool_use` with no `tool_result`.
+`test_the_disabled_input_cannot_queue_a_message` holds both.
 
 **The replay and the live stream can carry the same message, and appending both misleads.**
 `HumanInTheLoopMiddleware.after_model` re-emits the proposing message as its node update, and
