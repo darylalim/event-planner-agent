@@ -24,10 +24,10 @@ of the plan.
 | 7b | [checkpoint-retention.md](checkpoint-retention.md) | Session | None | 2 | Not started; not urgent until real client threads exist |
 | 8 | [streamlit-theme.md](streamlit-theme.md) | Session | None; reviewed on a scripted model | 2 | Done; $0 spent |
 | 9 | [streamlit-layout.md](streamlit-layout.md) | Session | None; reviewed on a scripted model | 2, 8 | Phase 1 done, $0 spent; phase 2 stopped at its spike |
-| 10 | [readme-restructure.md](readme-restructure.md) | Session | None | All others | Not started |
+| 10 | [readme-restructure.md](readme-restructure.md) | Session | None | All others | Done 2026-11-06, early at the operator's request |
 
-Plans 3-9 can move around as long as their "Needs first" column holds. Plan 10 stays last,
-because the others add to README sections it moves.
+Plans 3-9 can move around as long as their "Needs first" column holds. Plan 10 ran before
+plans 5 and 7b, so their documentation now goes in `docs/`.
 
 For now this runs only on the operator's machine, on loopback, so no authentication plan
 is needed yet. Write one before anyone else uses it: `user_id` is an unverified text

@@ -1,9 +1,7 @@
 # Plan: restructure `README.md`
 
-Status: not started. Written 2026-11-04 for a new session to carry out.
-**Do this last,** after every other plan in `README.md` in this folder, because they add
-to README sections this plan moves. Line numbers below are from 2026-11-04 and will have
-shifted.
+Status: done 2026-11-06, ahead of plans 5 and 7b at the operator's request. Written
+2026-11-04 for a new session to carry out. Line numbers below are from 2026-11-04.
 
 ## Goal
 

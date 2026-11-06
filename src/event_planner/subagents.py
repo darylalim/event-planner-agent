@@ -89,7 +89,8 @@ SUBAGENTS: list[SubAgent] = [VENUE_RESEARCHER, VENDOR_RESEARCHER, BUDGET_ANALYST
 #:   runs took 6-11 model calls, 20-38k output tokens and $0.28-$0.60, about a
 #:   third to a half of a brief. `medium` cost 58% less, but two of three runs
 #:   gave no worst case, and its answer is what the orchestrator weighs before
-#:   proposing a booking. README's "The current roster" has the experiment.
+#:   proposing a booking. "The current roster" in `docs/verified-live.md` has
+#:   the experiment.
 SUBAGENT_MODELS: dict[str, ModelChoice] = {
     "venue-researcher": ModelChoice("claude-sonnet-5-5", "medium"),
     "vendor-researcher": ModelChoice("claude-sonnet-5-5", "medium"),

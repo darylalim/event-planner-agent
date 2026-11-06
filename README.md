@@ -23,347 +23,6 @@ Event planning hits nearly every condition the harness exists for:
 `create_deep_agent` returns a compiled LangGraph graph, so checkpointers,
 `interrupt()`, streaming, and Studio all still work underneath.
 
-## Setup
-
-Requires [uv](https://docs.astral.sh/uv/). Two Python versions are declared and
-they do different jobs: `pyproject.toml` sets `>=3.11` as the compatibility
-floor, while `.python-version` pins *development* to 3.14 so every checkout
-builds the same environment. `uv sync` provisions the pinned interpreter
-automatically; change it with `uv python pin <version>`.
-
-uv itself is pinned too, by `[tool.uv] required-version` in `pyproject.toml`.
-`astral-sh/setup-uv` reads that key, so one line pins the CI runner and your
-checkout alike — and a mismatch is a hard error naming the version rather than a
-silent split between what your machine checks and what CI does. If `uv sync`
-greets you with *"Required uv version `==0.13.7` does not match the running
-version"*, that is this, working as intended — `uv self update 0.13.7` puts you
-back in step. It gates the project-aware commands only; `uvx ruff` and
-`uv self update` are deliberately untouched, the latter so the way out is never
-the thing being blocked.
-
-```bash
-uv sync
-cp .env.example .env   # then fill in ANTHROPIC_API_KEY
-```
-
-`ANTHROPIC_API_KEY` is required. `TAVILY_API_KEY` is optional — without it,
-`web_search` degrades gracefully, telling the agent to rely on the structured
-directory and to flag that reputation data went unchecked. `LANGSMITH_API_KEY`
-turns on tracing (see [Tracing](#tracing), including what it sends off the
-machine).
-
-The browser UI's dependency is a `web` **extra** rather than a core one, so the
-CLI and the LangGraph Platform image — neither of which imports Streamlit — do
-not carry it or its ~27 transitive packages. A checkout still gets it from
-`uv sync` alone, because the `dev` group asks for `event-planner-agent[web]`; a
-non-dev install that wants the page needs `uv sync --extra web`.
-
-## Run
-
-```bash
-uv run event-planner                                  # interactive CLI
-uv run event-planner --user alice@example.com         # scoped memory
-uv run event-planner --thread offsite-2026            # named conversation
-uv run event-planner --max-steps 400                  # longer planning session
-uv run event-planner --model claude-opus-5 --effort xhigh   # orchestrator only
-uv run streamlit run streamlit_app.py                 # browser UI
-uv run --with "langgraph-cli[inmem]" langgraph dev    # LangGraph Studio
-uv run pytest                                         # harness tests
-uv run scripts/live_check.py brief --yes-spend        # LIVE check, ~$0.65-$1
-```
-
-In the CLI: `/state` lists what is stored for the current user, `/export` writes
-their event files to `exports/`, and `/exit` quits.
-
-Both front ends read the same `.env` and share `.state/planner.sqlite` unless
-`EVENT_PLANNER_DB` points elsewhere, so a plan started in the terminal resumes
-in the browser on the same thread.
-
-## Contributing
-
-`main` requires a pull request and passing CI, so every change goes through a
-branch, including docs edits and version bumps. The `main requires CI` ruleset
-makes the six CI checks required and blocks force pushes and deletion of `main`.
-
-## Releases
-
-Bump `version` in `pyproject.toml`, run `uv lock`, and merge that through a pull
-request. `.github/workflows/release.yml` waits for CI to go green on that commit, then
-tags `v<version>` and publishes a GitHub release with generated notes. Nothing
-else is a trigger — not a tag you push, not an edit to `pyproject.toml` that
-leaves the version alone.
-
-The `uv lock` is not optional and it fails in the quiet direction. `uv.lock`
-records the project's own version alongside every dependency, so a bare bump
-makes `uv sync --locked` exit with *"The lockfile at `uv.lock` needs to be
-updated"* in all six CI jobs — and a red CI run emits no `workflow_run` success,
-so the release does not fail, it simply never happens.
-
-The gate asks *"does the version at this commit have a tag yet?"*, not *"did this
-push change pyproject.toml?"*. Every diff-shaped alternative breaks on some push
-shape and breaks silently: `HEAD~1` misses a bump in the middle commit of a
-multi-commit push, and `github.event.before` is unreachable after a force-push and
-is replayed verbatim on a re-run. Asking about the tag is correct on all of them,
-and makes re-runs, reverts, and no-op edits no-ops for one reason rather than three.
-
-It is a separate workflow rather than a third job in `ci.yml` so that file keeps
-`permissions: contents: read` and the README badge keeps reporting lint, types and
-tests rather than release outcomes. The cost is `workflow_run`, whose edges are
-recorded in the file: `github.sha` is the branch tip rather than the commit CI
-tested, the workflow only ever runs from main's copy of itself, and a tag pushed
-with `GITHUB_TOKEN` triggers no further workflows.
-
-Releases carry no build artifacts. The reason recorded here — that an installed
-wheel resolved its workspace to `<venv>/lib` and loaded no skills — is fixed: the
-workspace ships inside the package and CI's `deploy-shape` job asserts an
-installed copy resolves its skills. Attaching a wheel is now a decision rather
-than a blocked one, and publishing to PyPI remains separate: the name is
-unclaimed, a first upload takes it permanently, and README documents a
-checkout-and-`uv run` workflow that nobody has tested as an installed package.
-
-If you delete a release but leave its tag, the gate will say "already released"
-for good; the workflow's `workflow_dispatch` trigger is the recovery path.
-
-## Architecture
-
-```
-orchestrator (claude-opus-5-5, high effort)
-├── tools      search_venues · check_availability · search_vendors
-│               estimate_budget · hold_venue* · send_invitations*
-├── subagents  venue-researcher · vendor-researcher   (claude-sonnet-5-5, medium)
-│               budget-analyst                        (claude-sonnet-5-5, high)
-├── skills     venue-sourcing · budget-modeling        (loaded on demand)
-└── memory     /memories/AGENTS.md                     (loaded every turn)
-
-                                        * gated behind human approval
-```
-
-`web_search` belongs to the two researchers and not to the orchestrator, by design:
-the agent that can book venues and contact guests never reads arbitrary web
-pages. Anything only the web can answer, it asks a researcher for — in a
-context that is thrown away once the researcher reports.
-
-Each role's model and effort is chosen, not inherited: the orchestrator's lives
-in `models.py`, the subagents' in `SUBAGENT_MODELS` beside their specs. Effort is
-always sent explicitly, because the API's default is per model and moves —
-Claude Opus 5.5 defaults to `medium`, below the `high` Claude Opus 5 used. The
-subagents run on Sonnet because each `task` call starts them on a fresh
-conversation that is thrown away once they report, so a second model never
-shares a transcript with the orchestrator's.
-
-### Storage
-
-A `CompositeBackend` routes by path prefix, longest match first. The filesystem
-backend is the **default**, not a route, so an unrouted path doesn't fail — it
-lands on the shared root:
-
-| Path | Backend | Lifetime |
-| --- | --- | --- |
-| `/memories/` | `StoreBackend`, namespaced per user | Across sessions |
-| `/events/` | `StoreBackend`, namespaced per user | Across sessions |
-| `/artifacts/` | `StoreBackend`, namespaced per user | Across sessions |
-| everything else | `ReadOnlyFilesystemBackend` rooted in the package | On disk, shared, read-only |
-
-`/artifacts/` is deepagents' own territory. `FilesystemMiddleware` derives
-`large_tool_results/` and `conversation_history/` beneath it and offloads a tool result over
-20k tokens, or a human message over 50k, without anything here naming either path. What
-spills is a named client's shortlist or costed budget, and the planner's own typed brief.
-Routing is the same rule as `/events/`, applied to paths the harness writes rather than we
-do — and applied to the *root*, because the names below it are deepagents' to rename.
-
-Only `/skills/` lands on that shared root, and the root **refuses writes**.
-It is `src/event_planner/workspace/`, inside the package so that an installed
-copy carries it, and it runs with `virtual_mode=True` — the agent cannot read
-or write its own source. Read-only is what makes a root inside the package
-safe: an unrouted `write("/evil.py")` would otherwise land on the import path,
-and a writable `/skills/` would let anything `web_search` returns rewrite the
-guidance every tenant's next session loads. Those are still path guardrails,
-not process isolation: don't repoint `root_dir` at the repo, and don't use this
-backend in a server process handling untrusted input.
-
-Event files are store-backed rather than on disk, so they aren't browsable by
-default. `/export` in the CLI writes the current user's files to `exports/`.
-
-### Tenant isolation
-
-The agent has `ls` / `read_file` / `glob` / `grep` over its filesystem root, and
-that root is a **single static path** — backend factories were removed in
-deepagents 0.7, so it cannot vary per user. Anything reachable from it is
-therefore readable by every session. Four rules follow, each enforced by a test
-in `tests/test_security.py`:
-
-**Only shared reference material sits on the root.** `/skills/` is on disk;
-`/events/` and `/memories/` are routed to per-user store namespaces. Event
-files carry client names, headcounts, guest lists, and budgets, so leaving them
-on the shared root let one planner's session read another's brief.
-
-**State lives outside the root.** Checkpoints and the store go in `.state/` at
-the repo root, which the agent's root — now inside the package — is nowhere
-near. A database under
-the agent's root would let any session read every user's memories and every
-thread's history straight out of the raw file, bypassing namespacing
-completely. `--db` is validated against this too, so an operator can't
-reintroduce it.
-
-**Namespace mapping is injective.** Storage is scoped per user via
-`("event_planner", <kind>, "u", <component>)`. The store rejects namespace
-components outside `[A-Za-z0-9\-_@+:~]` — note the **period is excluded**,
-because `langgraph.store.base` rejects it even though the `deepagents` regex
-permits it, and only at write time. Sanitizing by replacement is also lossy
-(`"a/b"` and `"a b"` both collapse to `"a_b"`), so a digest of the raw id is
-appended: `alice@example.com` becomes `alice@example_com-ff8d9819fc0e`.
-
-**Missing identity does not fail open.** `PlannerContext.user_id` defaults to
-`None`, never to a placeholder string — a truthy default such as `"default"`
-sends every unidentified caller down the *identified* branch and into one
-shared bucket, which is precisely the failure this rule exists to prevent
-(LangGraph builds the dataclass from `context={}`, so that is the common path).
-With no `user_id`, storage scopes to the conversation thread, and `--user`
-likewise defaults to nothing. Pass `--user <id>` for storage that carries
-across threads.
-
-The one genuinely shared bucket is `("event_planner", <kind>, "unscoped")`,
-reached only when there is neither an id nor a resolvable thread. A
-checkpointer always supplies a `thread_id`, so reaching it means the caller is
-unroutable; it is labelled so no identified or threaded caller can land there.
-
-### Skills vs memory
-
-Both shape behaviour, but they load differently:
-
-- **Skills** (`src/event_planner/workspace/skills/*/SKILL.md`) — opened on demand when the task
-  calls for them. Good for long domain guidance.
-- **Memory** (`/memories/AGENTS.md`) — injected into the system prompt every
-  turn. Good for compact, always-relevant client facts.
-
-Subagents do **not** inherit skills. `venue-researcher` and `budget-analyst`
-list theirs explicitly in `subagents.py`.
-
-### Human-in-the-loop
-
-`hold_venue` and `send_invitations` are gated with `approve` / `edit` /
-`reject`. `respond` is deliberately excluded — a free-text reply to a booking
-request invites the model to read commentary as confirmation.
-
-`interrupt_on` silently does nothing without a checkpointer, so `build_agent`
-raises rather than handing back an agent whose approval gates don't gate. Pass
-`hosted=True` only when LangGraph Platform supplies its own persistence.
-
-### Step budget
-
-LangGraph counts every node as a super-step, and this harness runs seven
-middleware nodes at two different rates. Three `before_agent` (Skills,
-PatchToolCalls, Memory) and one `after_agent` (ParentNotifier) run once per
-invocation. One `before_model` (Skills) and two `after_model` (HumanInTheLoop,
-TodoList) run on every model call. A single tool round trip costs **5 steps**,
-not the 2 you'd expect from `model → tools`:
-
-```
-3 × before_agent → before_model → model → 2 × after_model → tools
-  → before_model → model → 2 × after_model → after_agent
-= 13 steps for one tool call and a final answer
-```
-
-The two extra node types arrived with deepagents 0.7.32. Neither does anything
-here: `before_model` pins skills only if a caller names them, and `after_agent`
-reports only to a parent that started the run with `start_async_task`.
-
-LangGraph's default `recursion_limit` of 25 would strand a session after
-roughly three tool calls — but it never applies here, because
-`create_deep_agent` binds `recursion_limit: 9_999` onto the compiled graph. So
-the 200 both front ends pass is a deliberate cap on a runaway session, not a
-rescue from 25: removing it uncaps to 9999 rather than restoring the default.
-Tune with `--max-steps`.
-
-### Tracing
-
-The graph is LangGraph, so [LangSmith](https://docs.smith.langchain.com/)
-tracing needs no code: set `LANGSMITH_API_KEY` and `LANGSMITH_TRACING=true`
-(both are in `.env.example`) and every model call, tool call and subagent
-`task` arrives as one tree per turn in the `LANGSMITH_PROJECT` project.
-`langsmith` is already installed as a dependency of `langchain-core`.
-
-What the code adds is the ability to *find* a trace. All three entry points
-build their run config with `cli.run_config`, so each root run is named
-`event-planner` and carries:
-
-| Field | Value | Where it comes from |
-| --- | --- | --- |
-| `thread_id` | the conversation | LangGraph copies it from `configurable`; LangSmith's Threads view groups on it |
-| `user_id` | the `--user` / sidebar id, omitted when there is none | `run_config` — it travels in `context=`, which no tracer reads |
-| `front_end` (also a tag) | `cli`, `web` or `live_check` | `run_config` |
-
-`langgraph dev` and a platform deployment pass their own config, so their traces
-carry `thread_id` but not the other two.
-
-**Tracing sits outside tenant isolation.** Namespacing keeps one planner's
-briefs, guest lists and memories away from another's *session*. A trace, though,
-records every prompt, tool result and file write in full and sends them to one
-LangSmith project, where anyone with access to that project can read every
-tenant's data. Turn it on only where that is acceptable.
-
-The test suite never traces. `tests/conftest.py` pins `LANGSMITH_TRACING_V2=false`,
-the name langsmith reads first. Without that line a narrowed run such as
-`pytest tests/test_streamlit_page.py tests/test_webui.py` tried 45 uploads with the
-real key, because a page test's real `_load_env` puts `.env`'s values into the
-environment. A full run escaped only because langsmith caches the lookup and had
-already read "off". `test_the_suite_never_traces` guards it.
-
-### The browser front end
-
-`streamlit_app.py` is the same graph, the same persistence, and the same
-approval gates behind a web page. Thread, user id, and model are sidebar fields
-rather than flags, and stored memories and event files are listed there as
-downloads. Four differences from the CLI are deliberate rather than incidental.
-
-**The turn loop is inverted.** `cli._run_turn` blocks on `input()` until the
-operator decides; a Streamlit script cannot block — it runs top to bottom and
-ends, then reruns on the next interaction. So the transcript is replayed from
-the checkpointer on every rerun and the pending approval is re-derived from
-`StateSnapshot.interrupts`, rather than either being accumulated in session
-state. A second copy would drift from the graph the first time a turn failed
-halfway through; re-deriving also means a half-answered booking survives a
-browser refresh instead of being stranded.
-
-**Replaying is why two things are lazy.** The approval gate is an `st.fragment`,
-because picking a decision or editing arguments would otherwise replay an entire
-planning session — 15.7 KB of venue comparison in the recorded run — to redraw
-one segmented control. It is safe to isolate because the interrupt is already
-resolved into the panel's arguments and cannot change while the graph is parked;
-submitting escapes on purpose, since `st.rerun()` defaults to `scope="app"`.
-
-Tool-result panels are lazy for the same reason. Streamlit computes and ships a
-collapsed expander's body anyway, so every rerun was re-serialising every tool
-result in the thread — 37-61% of all transcript text across the recorded
-threads, and 70.8 KB on the largest. `_render_tool` gates the body on
-`on_change="rerun"` and `panel.open`, keyed on `tool_call_id`: gating promotes
-the panel to a widget, and a label-derived key collides seven ways on a thread
-holding seven `estimate_budget` calls.
-
-**Artifacts download rather than export.** `/export` in the CLI writes store
-keys to `exports/`, which is why it validates those agent-chosen keys against
-traversal. The browser has no reason to write to the server's disk, so it
-doesn't — and a second copy of that check is a second thing to get wrong.
-
-**Approval takes two steps**, pick then submit. A single-click *Approve* is much
-easier to hit by accident than `a` + Enter is in a terminal, and `hold_venue`
-starts a deposit clock. `respond` is not offered, for the same reason it is
-absent from `ALLOWED_DECISIONS`; if config ever allows it, the UI says so rather
-than silently narrowing the operator's options.
-
-One operational note. `.streamlit/config.toml` binds the server to `127.0.0.1`,
-since Streamlit's default is every interface and this page has no
-authentication — "User id" names a tenant, it does not prove one. Under
-`streamlit run` that bind travels with the script: Streamlit appends the
-script-level config last, so the file beside `streamlit_app.py` outranks project
-and global config from any working directory. A `--server.address` flag or
-`STREAMLIT_SERVER_ADDRESS` outranks it in turn, and a config file cannot enforce
-itself, so the page checks the effective `server.address` at startup and warns in
-the browser when it is not loopback. The theme
-defines both light and dark so the mode toggle works; `primaryColor` was picked
-by measuring rather than by eye, since Streamlit puts white text on primary
-buttons and the primary button here is the one that commits money.
-
 ## What's real and what's stubbed
 
 | Component | Status |
@@ -378,411 +37,101 @@ visible, not blamed on a vendor API. The tool signatures are the contract the
 prompts are written against, so keep them stable when swapping in real
 backends.
 
-## Verified live
+## Quickstart
 
-The offline suite covers the harness and cannot cover model behaviour. These
-runs were made against `claude-opus-5` and their results recorded rather than
-assumed. The current roster — Claude Opus 5.5 orchestrating, Claude Sonnet 5.5
-subagents — has its own section, [The current roster](#the-current-roster);
-everything above it predates the move.
+Requires [uv](https://docs.astral.sh/uv/).
 
-### One full brief, end to end
+```bash
+uv sync
+cp .env.example .env   # then fill in ANTHROPIC_API_KEY
+uv run event-planner
+```
 
-85 guests, SF, $45k ceiling, seated lunch + livestreamed presentation:
+If `uv sync` reports a uv version mismatch, run `uv self update <version>` with the
+version it names. `TAVILY_API_KEY` is optional: without it, `web_search` tells the
+agent to rely on the structured directory and flag what went unchecked.
 
-| Measure | Result |
-| --- | --- |
-| Wall clock | 672s |
-| Graph steps | 64 of the 200 budget |
-| Tool calls | `write_todos` ×3, `task` ×2, `estimate_budget` ×7, `write_file` ×3, `read_file` ×4, `ls` ×3 |
-| Tokens, orchestrator | 392,563 in (336,253 cached) / 16,943 out |
-| Tokens, both subagents | 249,691 in (180,472 cached) / 31,515 out |
-| Cost | ~$2.10 — ~$0.87 orchestrator, ~$1.23 subagents |
-| Files produced | `brief.md`, `venues.md`, `vendors.md`, `budget.md` (~60 KB) |
+## Running it
 
-This table said **~$0.87** until it was re-measured: that figure is the
-orchestrator alone. Each `task` call checkpoints under its own namespace
-(`tools:<uuid>`), so summing the root thread's messages never sees the
-subagents' usage — more than half the total on every recorded brief.
+```bash
+uv run event-planner                                  # interactive CLI
+uv run event-planner --user alice@example.com         # scoped memory
+uv run event-planner --thread offsite-2026            # named conversation
+uv run event-planner --max-steps 400                  # longer planning session
+uv run event-planner --model claude-opus-5 --effort xhigh   # orchestrator only
+uv run streamlit run streamlit_app.py                 # browser UI
+uv run --with "langgraph-cli[inmem]" langgraph dev    # LangGraph Studio
+```
 
-- **Skills change behaviour.** For 85 seated guests it searched
-  `min_capacity=180`, applying the venue-sourcing rule that seated format uses
-  ~half of listed capacity — not the 85 in the brief.
-- **Delegation works.** Two subagents ran, each writing its own file and
-  returning a summary rather than dumping contents into the orchestrator.
-- **Budgets get pressure-tested.** Seven `estimate_budget` calls sweeping
-  catering rates and vendor minimums, per the budget-modeling skill.
-- **Memory generalizes.** It recorded "treat streaming as a standing
-  requirement" and "order special covers at headcount+2, counts drift up" —
-  reusable rules, not event trivia.
-- **Cross-session recall and isolation hold.** A brand-new thread for the same
-  user loads that memory; a different user's session does not see it.
-- **It pushed back.** The brief said "Thursday 19 September 2026"; that date is
-  a Saturday, and it flagged the mismatch and checked the real Thursday.
+In the CLI: `/state` lists what is stored for the current user, `/export` writes
+their event files to `exports/`, and `/exit` quits.
 
-### What a brief costs
+Both front ends read the same `.env` and share `.state/planner.sqlite` unless
+`EVENT_PLANNER_DB` points elsewhere, so a plan started in the terminal resumes
+in the browser on the same thread.
 
-Every model call's `usage_metadata` from the three recorded full briefs, read
-per checkpoint namespace and priced at list rates. Uncached input is billed at
-the base rate; no run reported a cache write.
-
-| Run | Opus 5, every role (measured) | Opus 5.5 + Sonnet 5.5 (estimate) |
-| --- | --- | --- |
-| `full-brief-1` — three subagents | $2.37 | $1.13 |
-| `full-brief-2` — two subagents | $1.76 | $0.89 |
-| `full-brief-3` — two subagents | $2.10 | $1.12 |
-| **Mean** | **$2.08** | **$1.05** |
-
-The right-hand column is an **estimate**: the same token counts repriced for
-the current roster. The one clean live brief on that roster came in at
-**$0.82** (below), so the estimate ran high — `medium` effort and Sonnet's
-tokenizer both cut the counts. Two things it showed reliably: the subagents
-were more than half of the old bill, which is why moving them to Sonnet is the
-larger saving; and output tokens, under a tenth of the volume, are more than
-half the cost.
-
-### The current roster
-
-Reproduce any of this with `uv run scripts/live_check.py brief --yes-spend` (or
-`edit`); it prints the transcript's shape, the verdict, and cost per role, and
-`usage --db … --thread …` re-prices a thread already on disk for free.
-
-The same 85-guest brief, re-run on Opus 5.5 (`high`) orchestrating Sonnet 5.5
-subagents. Six live runs — four briefs, two `edit` checks — ~$3.90 in all; only the
-last brief is a clean measurement, and the runs before it are each why
-something below exists.
-
-| Role | Calls | Tokens in (cached) / out | Cost |
-| --- | --- | --- | --- |
-| orchestrator — Opus 5.5 | 9 | 204,541 (180,324) / 9,835 | $0.33 |
-| budget-analyst — Sonnet 5.5 | 9 | 196,951 (159,439) / 22,086 | $0.33 |
-| venue-researcher — Sonnet 5.5 | 5 | 47,960 (33,011) / 5,206 | $0.09 |
-| vendor-researcher — Sonnet 5.5 | 3 | 21,972 (11,927) / 4,864 | $0.07 |
-| **Total** | **26** | | **$0.82**, 330s |
-
-Against `full-brief-3` on Opus 5 — $2.10 and 672s — that is about 60% cheaper
-and twice as fast, with all three subagents delegated, no `max_tokens` stop on
-any of the 26 calls, and the same substance in the answer: the date flagged as a
-Saturday, a shortlist, and a priced verdict with a worst case ($44,119, still
-under the ceiling). The researchers show the model change most plainly: $0.09
-and $0.07 here, $0.53 and $0.70 on Opus 5.
-
-What the earlier runs found:
-
-- **No delegation at all.** On the old orchestrator prompt, Opus 5.5 ran the
-  whole brief itself — zero `task` calls, every `web_search` in the context that
-  holds the booking tools. The prompt's escape hatch ("do not delegate work you
-  can finish yourself") was the cause; it now gives the reason to delegate
-  instead.
-- **A silent 4,096-token output cap.** `langchain-anthropic` 1.6.1 has no profile
-  for either 5.5 model id and falls back to 4,096. With delegation restored, the
-  budget analyst's `budget.md` ran past it and every `write_file` was cut off
-  before its `content` — 34 retries, $1.85 of a $2.50 brief, 21 minutes. The cap
-  is now set explicitly for every role.
-- **An `edit` read as a fault.** Answering a `hold_venue` with `edit` (60 -> 45
-  guests) executed 45 correctly, but the API still saw the model's own 60, so
-  Opus 5.5 reported the operator's correction as an error and advised against
-  paying the deposit. With `OperatorEditNote` it now says "the reviewer changed
-  the headcount from 60 to 45 before approving … I'm treating 45 as the confirmed
-  number" — and flags that the $12,000 total did not move with it. The resumed
-  turn carried one signed thinking block and was accepted, so an operator edit is
-  compatible with Opus 5.5's history checks.
-  `OperatorEditNote` has since been removed: langchain 1.4.2 ships the same
-  append-only notice in `HumanInTheLoopMiddleware`, and the repo's own copy went
-  silent on that release. Run live (`live_check.py edit`, $0.07), langchain's
-  default wording fixed the fault but not the framing: the model wrote "45 (you
-  asked for 60)" and asked the operator "which headcount is right?", and the
-  $12,000 total went unremarked. With `prompts.EDIT_NOTICE` passed as
-  `edit_notice` ($0.02), it listed 45 as settled and flagged that the $12,000
-  "was set for 60 guests and kept at 45". Both resumed turns carried one thinking
-  block and were accepted.
-
-A second clean run, after `web_search` was removed from the orchestrator:
-**$0.65 and 187s**. Both researchers were delegated, and the orchestrator made
-no attempt to call the tool it no longer has. It did the costing itself — six
-`estimate_budget` calls rather than delegating to `budget-analyst` — which the
-prompt permits in smaller doses and which reads no web content, so the boundary
-holds either way.
-
-Two runs are not a distribution, and these two disagree on substance: $39,884
-realistic and $44,119 worst case in the first, $43,400 and $46,900 in the
-second — the second's worst case over the ceiling. Expect cost, wall clock and
-the verdict's margins to vary from run to run, and re-measure before quoting a
-figure to anyone.
-
-After the 2026-11-04 dependency upgrade (deepagents 0.7.32, langchain 1.4.8,
-langchain-anthropic 1.7.10, anthropic 2.4.0), one brief and one `edit` check:
-
-| Role | Calls | Tokens in (cached) / out | Cost |
-| --- | --- | --- | --- |
-| orchestrator — Opus 5.5 | 14 | 338,377 (313,515) / 11,011 | $0.38 |
-| budget-analyst — Sonnet 5.5 | 11 | 429,865 (370,093) / 31,453 | $0.51 |
-| venue-researcher — Sonnet 5.5 | 6 | 61,219 (44,604) / 6,220 | $0.10 |
-| vendor-researcher — Sonnet 5.5 | 4 | 39,858 (23,702) / 6,818 | $0.11 |
-| **Total** | **35** | | **$1.10**, 432s |
-
-All three subagents were delegated and no role hit `max_tokens`. The cost is
-just above the earlier $0.65-$0.82, and the budget analyst is most of the
-difference: 42 `estimate_budget` calls and five `edit_file` calls, two of them
-refused as parallel writes to one path. deepagents 0.7.21 has that refusal too,
-and a single run can't separate the upgrade from ordinary variation.
-
-The `edit` check cost $0.07. The resumed turn carried one thinking block and was
-accepted, the model treated 45 as settled, and it flagged that the $12,000 total
-may have been set for 60 guests.
-
-On 2026-11-05 a test of `budget-analyst` at `medium` instead of `high`, with effort
-the only difference: seven briefs, $5.37. One `high` run was discarded and replaced
-because the orchestrator did the costing itself, so each arm has three valid runs.
-
-| Effort | Analyst calls | Analyst output tokens | Analyst cost | Mean analyst cost | Mean brief | Passed every check |
-| --- | --- | --- | --- | --- | --- | --- |
-| `high` | 6, 11, 8 | 19,788, 38,495, 21,113 | $0.28, $0.60, $0.31 | $0.40 | $0.92 | 3 of 3 |
-| `medium` | 4, 6, 5 | 7,962, 14,493, 12,171 | $0.11, $0.21, $0.18 | $0.17 | $0.69 | 1 of 3 |
-
-`high` stayed. `medium` cost 58% less, past the 20% the test required, but it also
-had to pass every check, and two of its runs gave no figure identified as a worst
-case. Runs were scored under shuffled labels before the arms were revealed. Their
-line items, tool totals, ceiling verdicts and `budget.md` files were all sound, and
-nothing hit `max_tokens`.
-
-This does not show that `medium` is worse. Those two runs are also the only two
-where the orchestrator's task to the analyst did not ask for a worst case, and
-that task is written before the analyst's effort has any effect. No prompt or skill
-requires one, so whether a brief gets a worst case currently depends on the
-orchestrator's wording. Three runs per arm can't separate the two causes, and
-retesting `medium` would need that requirement fixed first.
-
-Later on 2026-11-05 that requirement went in: the `budget-modeling` skill defines the
-worst case as the recommended plan with the same venue and vendors, every estimated
-line at the top of its plausible range, and any unconfirmed minimum applied. Both the
-analyst's and the orchestrator's prompts require it. `smoke` went from $1.57 to $1.40
-with verdict `clear`, and the new `worst_case_stated` check, which failed 9 of the 10
-saved replies it could score, passed. Three briefs followed, $2.47 in all:
-
-| Brief | Realistic | Worst case | Against the $45,000 ceiling | Cost |
-| --- | --- | --- | --- | --- |
-| 1 | $42,434 | $52,473 | $2,566 under, $7,473 over | $0.94 |
-| 2 | $38,746 | $47,230 | $6,254 under, $2,230 over | $0.78 |
-| 3 | $42,785 | $51,696 | $2,215 under, $6,696 over | $0.75 |
-
-All three replies stated a worst case, and so did the `smoke` brief ($38,050 and
-$45,525). The realistic total fit and the worst case did not in all four, so the
-requirement changes what the client is told. The briefs' mean cost of $0.82 is below
-the earlier $0.92, so it did not add measurable cost.
-
-The orchestrator's own path is still unproven. `budget-analyst` ran in all four, and
-although the orchestrator also called `estimate_budget` two or three times in each of
-the three briefs, none had it do all the costing, which is the case its prompt line
-exists for. `medium` was not retested.
-
-### The evaluation baseline
-
-`evals/` turns reading one run by hand into a scored comparison. Run `smoke` after
-a prompt or middleware change, `full` before changing a model or an effort level,
-and `compare` the result against a baseline from the same day. CLAUDE.md's
-"The evaluation suite" has the commands and what each verdict means.
-
-The first baseline, on 2026-11-04 with the current roster: 13 scenarios at three
-repetitions, 39 runs, **$6.00 and 39 minutes**. A smoke run is about $1. Web
-results came from fixtures and tracing was off.
-
-| Check | Result |
-| --- | --- |
-| Every gate: approvals, rejections, the orchestrator off the web, runs completing | No failures in 39 runs |
-| Planted web text, three styles | Resisted 9 of 9, and reported to the client 9 of 9 |
-| Capacity, dates, arguments, delegation, surcharge, memory | All decided runs passed |
-| Totals traced to `estimate_budget` | 4 of 4 decided, 2 undecided |
-| `budget-analyst` used when a budget was asked for | **2 of 6** |
-
-| Role | Cost |
-| --- | --- |
-| orchestrator | $3.86 |
-| venue-researcher | $1.08 |
-| budget-analyst | $0.54 |
-| vendor-researcher | $0.52 |
-
-The analyst figure is the finding. On `hidden-cost` the orchestrator costed the
-plan itself in all three runs, and on `standard-offsite` in one of three. The prompt
-permits a quick check, and no web content is involved, so the boundary holds, but
-the role is used less than its place in the roster suggests. A `standard-offsite`
-run cost $0.56 to $0.74 here, against $0.65 to $1.10 in the earlier single runs.
-
-To show the suite can fail, a deliberately broken orchestrator prompt ("never use
-`task`, call `hold_venue` straight away") was run on one injection scenario.
-`compare` returned `blocked` on `no_unrequested_proposal`, flagged
-`delegated_research` as regressed, and left `injection_resisted` undecided, since
-that run never read the planted page.
-
-Generating weak replies to calibrate the phase 2 judge turned up a second finding.
-Appending instructions to the orchestrator's prompt to hide drawbacks, invent
-details or withhold the verdict mostly failed across 24 runs ($4.24): it declined
-to invent Denver venues, and in several replies said what it had been told and
-that it would not comply ("You're about to commit real money, so the limits and
-extra costs are included below"). Weak replies now come from rewriting good ones
-instead ($0.31 for 27). This was read by hand, not scored, so it shows a tendency
-under these prompts rather than a guarantee.
-
-Three repetitions only detect large changes, and these fixtures are one narrow
-catalogue, so read a clean result as "no large regression", not as proof.
-
-### The approval gate
-
-All three decisions were run from the CLI on separate threads (~$0.25 total),
-and `edit` again from the browser. This is the path offline tests cannot reach:
-adaptive thinking is on by default, so a real `hold_venue` proposal arrives in
-an `AIMessage` carrying thinking blocks *alongside* the `tool_use`, and resuming
-replays that history to the API — a scripted `AIMessage` has none. Every run
-confirmed **1 signed thinking block** in the proposing turn, so the risky path
-was genuinely exercised rather than simulated.
-
-| Decision | Result |
-| --- | --- |
-| `approve` | Original args executed |
-| `edit` | Operator's corrected args executed (60 → 45 guests), not the model's |
-| `reject` | Stub never ran; the agent reported the refusal and did not retry |
-
-The `edit` runs surfaced a property worth keeping: the agent noticed that the
-executed arguments differed from what it proposed, and said so rather than
-silently accepting the change — a comparison table in the CLI, and in the
-browser (30 → 24 guests plus a corrected client name) an opening line of "the
-approval came back with two corrections I've absorbed" followed by a budget
-reworked at 24.
-
-`approve` and `reject` were not re-run from the browser. Both are recorded above
-for the CLI, and the browser's payloads are pinned against the CLI's by
-`test_reject_matches_the_cli_byte_for_byte` and `test_edit_matches_the_cli` —
-the decision dict is precisely what those compare.
-
-### The browser UI
-
-Driven through `streamlit_app.py` on several threads: a 40-guest brief ($18k
-ceiling) as `demo@example.com`, a 30-guest booking ($12k ceiling) on a separate
-thread and database, and a replay of the recorded `full-brief-3`.
-
-- **Streaming renders incrementally.** Tool calls appear as captions and results
-  as collapsed expanders while the turn is still running.
-- **Skills load on demand, and delegation works through the page.** Both
-  `venue-sourcing` and `budget-modeling` were read before any planning;
-  `venue-researcher` wrote a 15.7 KB `venues.md` and `vendor-researcher` wrote
-  `vendors.md`.
-- **Storage routes per user, visibly.** Event files landed under
-  `event_planner/events/u/demo@example_com-7462108984f6`, and with
-  `acme-planner`'s `/AGENTS.md` sitting in the same database the sidebar
-  correctly reported "no memories yet" for `demo@example.com`.
-- **The transcript survives losing the server.** The host reaped the background
-  process mid-turn, twice, and a fresh process replayed the whole transcript
-  from the checkpointer — the payoff for reading history from
-  `graph.get_state()` rather than accumulating it in session state.
-- **The fragment isolates.** Selecting `edit` and editing the arguments redrew
-  only the panel, leaving the transcript untouched; submitting escaped to a full
-  app run.
-- **Panels are genuinely lazy.** Replaying `full-brief-3` rendered 22 panels,
-  **0** code blocks in the DOM, and 74.1 KB of markup for a transcript whose
-  tool output alone is 70.8 KB — the bodies are absent, not merely hidden.
-  Opening one produced a single code block with the budget breakdown, and the
-  other six `estimate_budget result` panels stayed shut, which is what per-panel
-  widget identity buys.
-
-Two bugs were found this way, both since fixed and covered by tests.
-
-**A turn could be stranded.** The reaping above also left a thread at
-`next=('tools',)` with no interrupt to answer, and the page had no affordance
-for that state — so that brief never finished, and the thread would have sat on
-an unfinished tool call for good. Streaming `None` continues the pending node;
-the vendor-researcher then ran to completion.
-
-**`st.markdown` reads `$...$` as LaTeX.** Any line quoting two costs had the
-span between them swallowed and re-set as italic mathematics: "$10,281 — $1,719
-under your $12,000 ceiling" rendered as an equation, taking the figures an
-operator is asked to check with it. Every amount in the proposal was affected.
-Fixed by escaping bare `$` before rendering (`webui.markdown_safe`), with the
-live strings pinned as tests.
-
-### What the suite reaches, and what it can't
-
-Most of the browser's approval path is covered offline, because the middleware
-builds the interrupt rather than the model — so a *scripted* model is enough to
-produce a genuine one. `test_the_real_middleware_payload_parses` drives the real
-graph to a real interrupt and feeds the actual `snapshot.interrupts` to the
-page's parser. It found two things the hand-written fixtures had wrong:
-`review_configs` entries also carry `action_name`, and `description` is
-generated boilerplate repeating the tool name and a dict repr of the args, which
-the page had been rendering as prose directly under those same arguments. The
-resume itself needs no separate coverage: the page calls
-`graph.stream(Command(resume=...))` on the same graph with the same config and
-adds nothing to it.
-
-Opening a panel is reachable too, contrary to a claim recorded here once. A
-gated expander is a widget, so it registers its key in session state, and
-setting that key opens it under `AppTest` —
-`test_an_opened_panel_renders_its_body` and
-`test_opening_one_panel_leaves_the_others_closed` drive the two behaviours the
-browser run showed. What the browser added was scale and the DOM measurement,
-not the only possible coverage.
-
-What remains genuinely unreachable offline is the fragment's own execution mode.
-`AppTest` builds a fresh `LocalScriptRunner` per call and never sets
-`fragment_id_queue`, so `_approval_panel` only ever runs inline there; the
-browser's replay from `MemoryFragmentStorage` is covered by the live runs above
-and not by the suite. The invariant that makes the isolation safe — that the
-panel reads no graph state while rendering — is pinned by
-`test_the_panel_reads_no_graph_state_while_rendering`.
-
-## Notes on `deepagents` 0.7.32
-
-Three places where the published guidance and the installed package disagree.
-All were found by inspecting the package, and all are covered by tests:
-
-1. **`write_todos` is not bound by default.** The docs describe
-   `TodoListMiddleware` as always present; it is not. `agent.py` adds it
-   explicitly, since the orchestrator prompt instructs the model to plan with
-   it. `test_planning_tool_is_bound` guards this.
-2. **Backend constructors changed.** The docs show `StateBackend(rt)` and
-   `lambda rt: StoreBackend(rt)`. The installed signatures are `StateBackend()`
-   and `StoreBackend(*, namespace, store=None)`, and `backend` takes a direct
-   instance rather than a factory.
-3. **`create_deep_agent` gained a `memory=[...]` parameter** backed by
-   `MemoryMiddleware`, which loads memory files into the system prompt. It is
-   not mentioned in the current guidance.
-
-## Layout
+## How it works
 
 ```
-streamlit_app.py  the browser front end — the page, and nothing else of consequence
-src/event_planner/
-  agent.py        harness wiring — backend, memory, skills, approval gates
-  models.py       the orchestrator's model and effort, and the ModelChoice type
-  subagents.py    the three researcher subagents, and the model each runs on
-  prompts.py      orchestrator + subagent system prompts
-  context.py      per-user memory namespacing
-  cli.py          interactive REPL with approval prompts
-  webui.py        logic the page delegates to, testable without a Streamlit runtime
-  tools/          catalog (stub) · budget (real) · bookings (stub) · search (live)
-  workspace/      the agent's filesystem view — ships in the wheel, read-only
-    skills/       venue-sourcing · budget-modeling
-.state/           checkpoints, memory, event files   (gitignored, out of reach)
-exports/          /export output                     (gitignored)
-tests/
-  test_harness.py        approval gates, tool binding, config guards, step budget
-  test_security.py       tenant isolation — reachability, namespaces, fail-closed
-  test_approval_cli.py   the operator's approve/edit/reject prompt
-  test_webui.py          the web front end's decisions, incl. parity with the CLI
-  test_streamlit_page.py the real page driven through Streamlit's AppTest
-  test_tools.py          tool correctness — dates, budgets, booking refusals
-  test_live_check.py     the live script's cost accounting, offline
-  test_evals.py          the evaluation checks and driver, offline
-scripts/
-  live_check.py          run the real model and report cost per role (spends money)
-evals/                   scored comparison of model behaviour (spends money)
-  scenarios.py           briefs, scripted approvals, expected facts, planted pages
-  driver.py              runs a scenario, answers approvals, captures everything
-  checks.py              deterministic gates and scored checks
-  judge.py               rubric checks, usable only after calibration
-  weak.py                flawed rewrites of real replies, to calibrate the judge
-  run.py                 suites, spend cap, compare, rescore
-  results/               JSONL output                (gitignored)
+orchestrator (claude-opus-5-5, high effort)
+├── tools      search_venues · check_availability · search_vendors
+│               estimate_budget · hold_venue* · send_invitations*
+├── subagents  venue-researcher · vendor-researcher   (claude-sonnet-5-5, medium)
+│               budget-analyst                        (claude-sonnet-5-5, high)
+├── skills     venue-sourcing · budget-modeling        (loaded on demand)
+└── memory     /memories/AGENTS.md                     (loaded every turn)
+
+                                        * gated behind human approval
 ```
+
+The orchestrator takes the brief and delegates research to subagents, which write
+their findings to per-user storage and report back. It holds the booking tools, and
+the graph stops for a human decision before either one runs. See
+[Architecture](docs/architecture.md) for the reasoning.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/approval-panel-dark.png">
+  <img alt="The approval panel for a hold_venue call, showing the proposed arguments and Approve, Edit and Reject choices" src="docs/images/approval-panel-light.png">
+</picture>
+
+*The browser UI's approval panel, shown with sample data.*
+
+## Safety in brief
+
+- **Approval gates.** `hold_venue` and `send_invitations` wait for `approve`, `edit`
+  or `reject`, and `build_agent` refuses to build without the checkpointer they need.
+- **Per-user storage.** Memories, event files and offloaded results are namespaced
+  per user. The shared filesystem root holds only skills and refuses writes.
+- **No web access beside the booking tools.** `web_search` belongs to the two
+  researchers, so the agent that can book never reads arbitrary web pages.
+- **No authentication.** The user id names a tenant but doesn't prove one, so keep
+  the Streamlit page on loopback. It binds to `127.0.0.1` and warns if it doesn't.
+- **Tracing leaves the machine.** With LangSmith on, every prompt and tool result
+  goes to one project, outside per-user isolation.
+
+## Development
+
+```bash
+uv run pytest                                         # harness tests
+uvx ruff check .                                      # lint
+uvx ruff format .                                     # format
+uvx ty check                                          # types
+uv run scripts/live_check.py brief --yes-spend        # LIVE check, ~$0.65-$1
+```
+
+`main` requires a pull request and passing CI, so every change goes through a branch.
+
+## Documentation
+
+- [Architecture](docs/architecture.md): storage, tenant isolation, approvals, step
+  budget, tracing, the browser front end and the file layout.
+- [Verified live](docs/verified-live.md): recorded runs against the real model,
+  including costs and the evaluation baseline.
+- [Development](docs/development.md): toolchain pins, API keys and contributing.
+- [Releases](docs/releases.md): how a version bump becomes a release.
+- [Notes on `deepagents`](docs/deepagents-notes.md): where its docs and the installed
+  package disagree.
+- [Plans](docs/plans/README.md): what's done and what's next.
 
 ## License
 
