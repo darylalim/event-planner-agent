@@ -722,6 +722,30 @@ def test_the_orchestrator_is_told_to_delegate_research_and_why():
     assert "ask a researcher for it" in prompt
 
 
+def test_every_costing_path_is_told_to_state_a_worst_case():
+    """Each copy covers a path the others cannot reach, so all three are pinned.
+
+    In six scored runs the orchestrator asked the analyst for a worst case in four
+    and only those four got one, so the analyst's prompt has to ask unprompted.
+    The orchestrator's has to as well, because it did all the costing itself in two
+    recorded runs and never saw the analyst's. The skill holds the full definition,
+    but skills are opened on demand, so neither prompt can leave it to the skill.
+    """
+    definition = "every estimated\nline at the top of its plausible range"
+    assert definition in ORCHESTRATOR_PROMPT
+    assert 'labelled "worst case"' in ORCHESTRATOR_PROMPT
+    assert "whether `budget-analyst` costs it or you\ndo" in ORCHESTRATOR_PROMPT
+    assert "ask for it in every `task`" in ORCHESTRATOR_PROMPT
+
+    analyst = prompts.BUDGET_ANALYST_PROMPT
+    assert "every estimated line at the top of its plausible\nrange" in analyst
+    assert "even if you were not asked" in analyst
+
+    skill = (WORKSPACE / "skills/budget-modeling/SKILL.md").read_text()
+    assert "every\nestimated line at the top of its plausible range" in skill
+    assert "unconfirmed minimum" in skill
+
+
 def test_the_orchestrator_cannot_read_the_web(scripted):
     """Structural, not requested: the agent holding `hold_venue` and
     `send_invitations` gets no tool that returns arbitrary web content.

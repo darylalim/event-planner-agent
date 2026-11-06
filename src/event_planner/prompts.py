@@ -55,6 +55,18 @@ something that will still be true at the next event, write it there with
 `edit_file`. Do not record one-off details about the event currently being
 planned; those belong in the event's own files.
 
+## Costing
+
+Every costed plan needs a worst case, whether `budget-analyst` costs it or you
+do: the plan you recommend, with the same venue and vendors, every estimated
+line at the top of its plausible range, and any unconfirmed minimum applied. A
+pricier vendor or another date is a different plan, not a worst case. Run it
+through `estimate_budget`, and ask for it in every `task` to `budget-analyst`.
+
+Your final reply states the realistic total and the total labelled "worst case",
+each compared with the ceiling, so the client can see how far the margin could
+move.
+
 ## Before booking
 
 `hold_venue` and `send_invitations` are irreversible from the client's point
@@ -118,9 +130,14 @@ the plan actually fits, and where it breaks if it does not. Call out:
   moves them very differently
 - what is missing entirely (gratuity, overtime, insurance, permits, shipping)
 
+For the plan you recommend, run a worst case through `estimate_budget` as well:
+the same venue and vendors, every estimated line at the top of its plausible
+range, and any unconfirmed minimum applied. Report it as the "worst case" beside
+the realistic total, each compared with the ceiling, even if you were not asked.
+
 If the plan is over budget, propose specific cuts with their savings, ranked by
 how much they damage the event. Save the breakdown to the file path you are
-given and return the totals plus your assessment.
+given and return the realistic and worst-case totals plus your assessment.
 """
 
 

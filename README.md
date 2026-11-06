@@ -553,6 +553,29 @@ requires one, so whether a brief gets a worst case currently depends on the
 orchestrator's wording. Three runs per arm can't separate the two causes, and
 retesting `medium` would need that requirement fixed first.
 
+Later on 2026-11-05 that requirement went in: the `budget-modeling` skill defines the
+worst case as the recommended plan with the same venue and vendors, every estimated
+line at the top of its plausible range, and any unconfirmed minimum applied. Both the
+analyst's and the orchestrator's prompts require it. `smoke` went from $1.57 to $1.40
+with verdict `clear`, and the new `worst_case_stated` check, which failed 9 of the 10
+saved replies it could score, passed. Three briefs followed, $2.47 in all:
+
+| Brief | Realistic | Worst case | Against the $45,000 ceiling | Cost |
+| --- | --- | --- | --- | --- |
+| 1 | $42,434 | $52,473 | $2,566 under, $7,473 over | $0.94 |
+| 2 | $38,746 | $47,230 | $6,254 under, $2,230 over | $0.78 |
+| 3 | $42,785 | $51,696 | $2,215 under, $6,696 over | $0.75 |
+
+All three replies stated a worst case, and so did the `smoke` brief ($38,050 and
+$45,525). The realistic total fit and the worst case did not in all four, so the
+requirement changes what the client is told. The briefs' mean cost of $0.82 is below
+the earlier $0.92, so it did not add measurable cost.
+
+The orchestrator's own path is still unproven. `budget-analyst` ran in all four, and
+although the orchestrator also called `estimate_budget` two or three times in each of
+the three briefs, none had it do all the costing, which is the case its prompt line
+exists for. `medium` was not retested.
+
 ### The evaluation baseline
 
 `evals/` turns reading one run by hand into a scored comparison. Run `smoke` after

@@ -361,17 +361,22 @@ def _dollars(raw: str) -> int | None:
     return int(digits) if digits else None
 
 
-def totals_trace_to_tools(capture: Capture, expect: Expect) -> Outcome:
-    """Totals in the reply match an `estimate_budget` result."""
-    if not expect.budget:
-        return NA
+def _computed_totals(capture: Capture) -> set[int]:
+    """Every TOTAL an `estimate_budget` call returned, in any role."""
     results = [c.result or "" for c in _calls(capture, "estimate_budget")]
-    computed = {
+    return {
         amount
         for result in results
         for raw in _TOOL_TOTAL.findall(result)
         if (amount := _dollars(raw)) is not None
     }
+
+
+def totals_trace_to_tools(capture: Capture, expect: Expect) -> Outcome:
+    """Totals in the reply match an `estimate_budget` result."""
+    if not expect.budget:
+        return NA
+    computed = _computed_totals(capture)
     if not computed:
         return _fail("no estimate_budget total exists to trace to")
     stated = {
@@ -386,6 +391,46 @@ def totals_trace_to_tools(capture: Capture, expect: Expect) -> Outcome:
         amount for amount in stated if all(abs(amount - t) > _ROUNDING_USD for t in computed)
     )
     return _fail(f"stated totals with no tool result: {stray}") if stray else PASS
+
+
+_WORST_CASE = r"worst[-\u2010\u2011 ]case\b"
+_AMOUNT = r"\$\s*(\d{1,3}(?:,\d{3})+|\d{4,})"
+#: The first figure after the label, or one joined to it by a short connective.
+#: Any wider gap let "$38,261 realistic and worst case $3,000 more" read as a
+#: worst case of $38,261, which is the realistic total.
+_WORST_TOTAL = re.compile(
+    rf"{_WORST_CASE}[^$\n]*{_AMOUNT}"
+    rf"|{_AMOUNT}\**\s*(?:\(|(?:in|at|as|is|under|for)\s+(?:(?:the|a|your)\s+)?(?:\w+\s+)?)?"
+    rf"{_WORST_CASE}",
+    re.I,
+)
+
+
+def worst_case_stated(capture: Capture, expect: Expect) -> Outcome:
+    """The reply labels a figure the worst case, and a tool computed that figure.
+
+    Tracing is what separates a total from a margin: "in the worst case you'd have
+    about $3,600 to spare" names a figure, but no `estimate_budget` returned it. So
+    a label with no traced figure beside it is `unknown`, since a table with the
+    label in its header reads the same way. Which plan the figure belongs to is
+    beyond this check, and so is whether it follows the definition.
+    """
+    if not expect.budget:
+        return NA
+    computed = _computed_totals(capture)
+    if not computed:
+        return _unknown("estimate_budget was never called")
+    if not re.search(r"\bworst\b", capture.reply, re.I):
+        return _fail("the reply states no worst case")
+    stated = sorted(
+        amount
+        for groups in _WORST_TOTAL.findall(capture.reply)
+        for raw in groups
+        if raw and (amount := _dollars(raw)) is not None
+    )
+    if any(abs(amount - total) <= _ROUNDING_USD for amount in stated for total in computed):
+        return PASS
+    return _unknown(f"worst case named, but no computed total beside it: {stated}")
 
 
 def surcharge_included(capture: Capture, expect: Expect) -> Outcome:
@@ -502,6 +547,7 @@ SCORED: dict[str, Check] = {
     "delegated_research": delegated_research,
     "analyst_used": analyst_used,
     "totals_trace_to_tools": totals_trace_to_tools,
+    "worst_case_stated": worst_case_stated,
     "surcharge_included": surcharge_included,
     "reference_reported": reference_reported,
     "reply_states": reply_states,
