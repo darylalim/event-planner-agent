@@ -1008,7 +1008,7 @@ with stored_slot:
 
 
 # --------------------------------------------------------------------------- #
-# approval gate, or the input box — never both
+# approval gate, or a live input box — never both
 # --------------------------------------------------------------------------- #
 
 raw_interrupts = getattr(snapshot, "interrupts", None)
@@ -1051,6 +1051,12 @@ elif reviews:
         graph,
         config,
     )
+    # Not an input: `disabled` with no `on_submit`, so nothing here can queue a
+    # message, whatever reaches the widget. It is drawn because the page only
+    # stays scrolled to the bottom while a top-level `chat_input` exists. Without
+    # one, the page jumps to the top as the panel appears, and the panel is left
+    # below the whole transcript, off-screen.
+    st.chat_input("Answer the approval above to continue", key="chat_prompt", disabled=True)
 
 else:
     # A turn can also end mid-flight — the process dies between super-steps, or a

@@ -591,11 +591,41 @@ def test_a_tool_result_with_no_identity_still_renders(page):
 # --------------------------------------------------------------------------- #
 
 
-def test_a_pending_approval_replaces_the_input_box(page):
-    """The graph is interrupted; a new user message has nowhere to go."""
+def test_a_pending_approval_disables_the_input_box(page):
+    """The graph is interrupted; a new user message has nowhere to go.
+
+    The box is still drawn, because the page only stays scrolled to the bottom
+    while a top-level `chat_input` exists. Without it, the page jumps to the top
+    as the panel appears and leaves the panel off-screen.
+    """
     at, _ = page(_interrupt())
-    assert len(at.chat_input) == 0
+    assert [box.disabled for box in at.chat_input] == [True]
     assert any("Approval required" in s.value for s in at.subheader)
+
+
+def test_the_disabled_input_cannot_queue_a_message(page, monkeypatch):
+    """Two guards, because the second does not rely on Streamlit.
+
+    `disabled` is enforced server side only since 1.62, the same dependency
+    `test_a_submit_that_slips_past_the_disabled_button_sends_nothing` exists
+    for. Passing no `on_submit` means no value can reach `pending_input`,
+    whichever Streamlit is installed. A message queued here would run against
+    a thread holding a `tool_use` with no `tool_result`.
+    """
+    real_input = st.chat_input
+    calls = []
+
+    def recorded(*args, **kwargs):
+        calls.append(kwargs)
+        return real_input(*args, **kwargs)
+
+    monkeypatch.setattr(st, "chat_input", recorded)
+    at, fake = page(_interrupt())
+    assert [call.get("on_submit") for call in calls] == [None]
+
+    with pytest.raises(AppTestError, match="disabled"):
+        at.chat_input[0].set_value("book it anyway")
+    assert fake.sent == [], "a message reached a graph waiting on an approval"
 
 
 def test_only_supported_decisions_are_offered(page):

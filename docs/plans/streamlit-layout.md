@@ -153,7 +153,10 @@ appears, so a top-aligned panel was fully visible and a bottom-aligned one was n
 
 This is the current page, not phase 2. `chat_input` is not rendered during an approval, and the
 page jumps to the top when it goes. On the real page with a long transcript, `scrollTop` was
-0 of 5026 right after the turn, with the submit button 5702px down. Not fixed here.
+0 of 5026 right after the turn, with the submit button 5702px down.
+
+Fixed separately by drawing a disabled `chat_input` during an approval. The page now stays at
+the bottom, with the submit button in view.
 
 ## Verification
 
