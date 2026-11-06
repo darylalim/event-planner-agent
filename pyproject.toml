@@ -1,6 +1,6 @@
 [project]
 name = "event-planner-agent"
-version = "0.4.0"
+version = "0.5.0"
 description = "Event planning agent built on Deep Agents: turns a brief into a costed plan, with human approval before anything is booked or sent."
 authors = [{ name = "Daryl Lim" }]
 readme = "README.md"
